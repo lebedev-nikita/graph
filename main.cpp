@@ -15,8 +15,13 @@ const uint32_t RED   = 0x000000FF;
 const uint32_t GREEN = 0x0000FF00;
 const uint32_t BLUE  = 0x00FF0000;
 
-// TODO: настроить так, чтобы все работало при разных ширине и высоте
-// (попробовать image = malloc(...) ?)
+/*
+    TODO:
+      * настроить так, чтобы все работало при разных ширине и высоте
+        (попробовать image = malloc(...) ?)
+      * POINT: сделать, чтобы свет отражался и от внутренней поверхности сферы,
+        если она окружает камеру
+*/
 #define IMG_WIDTH 1024
 #define IMG_HEIGHT 1024
 #define FOV M_PI/3
@@ -28,6 +33,8 @@ class Vec3d {
 public:
   double x, y, z;
 
+  Vec3d(): x(0), y(0), z(0)
+  {}
   Vec3d(double xx, double yy, double zz): x(xx), y(yy), z(zz)
   {}
   Vec3d operator * (const double n) const
@@ -35,7 +42,9 @@ public:
   Vec3d operator * (const Vec3d &v) const
   { return Vec3d(this->x * v.x, this->y * v.y, this->z * v.z); }
   Vec3d operator - (const Vec3d &v) const
-  { return Vec3d(this->x - v.x, this->y -v.y, this->z - v.z); }
+  { return Vec3d(this->x - v.x, this->y - v.y, this->z - v.z); }
+  Vec3d operator - () const
+  { return Vec3d(-x, -y, -z); }
   Vec3d operator + (const Vec3d &v) const
   { return Vec3d(this->x + v.x, this->y + v.y, this->z + v.z); }
   Vec3d operator += (const Vec3d &v)
@@ -64,14 +73,14 @@ double clamp(double num) {
   else         return num;
 }
 
-bool solveQuadratic(double a, double b, double c, double tMin, double tMax)
+bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
 {
   double discr = b*b - 4*a*c;
   if (discr < 0) {
     return false;
   }
   else if (discr == 0) {
-    tMin = -b/(2*a);
+    tMin = tMax = -b/(2*a);
     return true;
   }
   else {
@@ -128,11 +137,12 @@ public:
 
   bool intersect(const Vec3d &orig, const Vec3d &dir, double &tMin, double &tMax)
   {
-    Vec3d OC = center - orig;
+    Vec3d OC = orig - center;
     double a = dotProduct(dir,dir);
     double b = 2 * dotProduct(OC, dir);
-    double c = dotProduct(OC,OC) - rad2;
-    return solveQuadratic(a, b, c, tMin, tMax);
+    double c = dotProduct(OC, OC) - rad2;
+    bool res = solveQuadratic(a, b, c, tMin, tMax);
+    return res;
   }
 
   Vec3d getNormal(const Vec3d &point)
@@ -146,6 +156,7 @@ public:
 Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &N, vector<Light*> &lights)
 {
   Vec3d illumination(0,0,0);
+  Vec3d lightDir;
 
   for (int i = 0; i < lights.size(); i++)
   {
@@ -155,9 +166,12 @@ Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &N, vector<Light*>
         illumination += lights[i]->color;
         break;
       case POINT:
-        ;// TODO
+        lightDir = normalize(hitPoint - lights[i]->source);
+        illumination += lights[i]->color * clamp(dotProduct(-lightDir, N));
+        break;
       case DIRECTIONAL:
-        ;// TODO
+        // TODO
+        break;
     }
   }
   return illumination;
@@ -173,18 +187,18 @@ bool trace (Vec3d orig,
   double closestDist = INFINITY;
 
   Object* obj;
-  double t1, t2;
+  double tMin, tMax;
 
   for (int i = 0; i < objects.size(); i++)
   {
-    if (objects[i]->intersect(orig, dir, t1, t2))
+    if (objects[i]->intersect(orig, dir, tMin, tMax))
     {
-      if (t1 > 0 && t1 < closestDist) {
-        closestDist = t1;
+      if (tMin > 0 && tMin < closestDist) {
+        closestDist = tMin;
         hitObject = objects[i];
       }
-      else if (t2 > 0 && t2 < closestDist) {
-        closestDist = t2;
+      else if (tMax > 0 && tMax < closestDist) {
+        closestDist = tMax;
         hitObject = objects[i];
       }
     }
@@ -227,29 +241,35 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
 
   vector<Object*> objects;
 
-  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1);
+  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 2);
   sph1->color = Vec3d(1,0,0);
-  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1);
+  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 2);
   sph2->color = Vec3d(0,1,0);
-  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1);
+  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 2);
   sph3->color = Vec3d(0,0,1);
+  // Sphere* sph4 = new Sphere(Vec3d(0,0,0), 16);
+  // sph4->color = Vec3d(0,0.7,0.9);
 
   objects.push_back(sph1);
   objects.push_back(sph2);
   objects.push_back(sph3);
+  // objects.push_back(sph4);
 
   vector<Light*> lights;
 
   // TODO: проработать, чтобы сумма освещения не была больше 1
   Light* light1 = new Light(Vec3d(0.2, 0.2, 0.2), AMBIENT);
-  Light* light2 = new Light(Vec3d(0.6, 0.6, 0.6), POINT);
-  light2->source = Vec3d(1,1,1);
-  Light* light3 = new Light(Vec3d(0.2, 0.2, 0.2), DIRECTIONAL);
-  light3->direction = Vec3d(1, 4, 4);
+  Light* light2 = new Light(Vec3d(0.3, 0.3, 0.3), POINT);
+  light2->source = Vec3d(-4,3,10);
+  Light* light4 = new Light(Vec3d(0.3, 0.3, 0.3), POINT);
+  light4->source = Vec3d(4,3,10);
+  // Light* light3 = new Light(Vec3d(0.2, 0.2, 0.2), DIRECTIONAL);
+  // light3->direction = Vec3d(1, 4, 4);
 
   lights.push_back(light1);
   lights.push_back(light2);
-  lights.push_back(light3);
+  lights.push_back(light4);
+  // lights.push_back(light3);
 
 
   /*

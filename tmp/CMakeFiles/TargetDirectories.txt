@@ -1,3 +1,0 @@
-/Users/nikita/Work/Graph/tmp/CMakeFiles/rebuild_cache.dir
-/Users/nikita/Work/Graph/tmp/CMakeFiles/edit_cache.dir
-/Users/nikita/Work/Graph/tmp/CMakeFiles/rt.dir

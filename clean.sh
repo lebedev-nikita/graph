@@ -1,3 +1,1 @@
-cd tmp
-rm -rf *
-cd ..
+rm -rf tmp
