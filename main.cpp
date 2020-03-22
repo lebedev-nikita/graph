@@ -15,8 +15,10 @@ const uint32_t RED   = 0x000000FF;
 const uint32_t GREEN = 0x0000FF00;
 const uint32_t BLUE  = 0x00FF0000;
 
-#define IMG_WIDTH 512
-#define IMG_HEIGHT 512
+// TODO: настроить так, чтобы все работало при разных ширине и высоте
+// (попробовать image = malloc(...) ?)
+#define IMG_WIDTH 1024
+#define IMG_HEIGHT 1024
 #define FOV M_PI/3
 #define BACKGROUND_COLOR Vec3d(0,0.7,1)
 
@@ -30,8 +32,19 @@ public:
   {}
   Vec3d operator * (const double n) const
   { return Vec3d(this->x * n, this->y * n, this->z * n); }
-  Vec3d operator - (const Vec3d v) const
+  Vec3d operator * (const Vec3d &v) const
+  { return Vec3d(this->x * v.x, this->y * v.y, this->z * v.z); }
+  Vec3d operator - (const Vec3d &v) const
   { return Vec3d(this->x - v.x, this->y -v.y, this->z - v.z); }
+  Vec3d operator + (const Vec3d &v) const
+  { return Vec3d(this->x + v.x, this->y + v.y, this->z + v.z); }
+  Vec3d operator += (const Vec3d &v)
+  {
+    this->x += v.x;
+    this->y += v.y;
+    this->z += v.z;
+    return *this;
+  }
 };
 
 // Вспомогательные функции
@@ -76,6 +89,22 @@ bool solveQuadratic(double a, double b, double c, double tMin, double tMax)
   }
 }
 
+// Свет
+
+enum LightType { AMBIENT, POINT, DIRECTIONAL};
+
+class Light {
+public:
+  Vec3d color;
+  LightType lightType;
+
+  Vec3d source;
+  Vec3d direction;
+
+  Light(const Vec3d &clr, LightType type) :
+    color(clr), lightType(type), source(0,0,0), direction(0,0,0) {}
+};
+
 // Объекты
 
 class Object {
@@ -84,7 +113,8 @@ public:
 
   Object() : color(1,0,0) {};
   virtual ~Object() {}
-  virtual bool intersect(Vec3d orig, Vec3d dir, double &tMin, double &tMax) = 0;
+  virtual bool intersect(const Vec3d &orig, const Vec3d &dir, double &tMin, double &tMax) = 0;
+  virtual Vec3d getNormal(const Vec3d &point) = 0;
 };
 
 class Sphere : public Object {
@@ -96,7 +126,7 @@ public:
   Sphere(const Vec3d &c, double r) : center(c), rad(r), rad2(r*r)
   {}
 
-  bool intersect(Vec3d orig, Vec3d dir, double &tMin, double &tMax)
+  bool intersect(const Vec3d &orig, const Vec3d &dir, double &tMin, double &tMax)
   {
     Vec3d OC = center - orig;
     double a = dotProduct(dir,dir);
@@ -104,11 +134,40 @@ public:
     double c = dotProduct(OC,OC) - rad2;
     return solveQuadratic(a, b, c, tMin, tMax);
   }
+
+  Vec3d getNormal(const Vec3d &point)
+  {
+    return normalize(point - center);
+  }
 };
 
 // Основные функции
 
-bool trace (Vec3d orig, Vec3d dir, vector<Object*> objects, Object*& hitObject)
+Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &N, vector<Light*> &lights)
+{
+  Vec3d illumination(0,0,0);
+
+  for (int i = 0; i < lights.size(); i++)
+  {
+    switch (lights[i]->lightType)
+    {
+      case AMBIENT:
+        illumination += lights[i]->color;
+        break;
+      case POINT:
+        ;// TODO
+      case DIRECTIONAL:
+        ;// TODO
+    }
+  }
+  return illumination;
+}
+
+bool trace (Vec3d orig,
+            Vec3d dir,
+            vector<Object*> &objects,
+            Object*& hitObject,
+            Vec3d &hitPoint)
 {
   hitObject = NULL;
   double closestDist = INFINITY;
@@ -131,16 +190,27 @@ bool trace (Vec3d orig, Vec3d dir, vector<Object*> objects, Object*& hitObject)
     }
   }
 
-  return hitObject != NULL;
+  if (hitObject != NULL)
+  {
+    hitPoint = orig + dir * closestDist;
+    return true;
+  }
+  else
+  {
+    return false;
+  }
 }
 
-Vec3d castRay(Vec3d orig, Vec3d dir, vector<Object*> objects)
+Vec3d castRay(Vec3d orig, Vec3d dir, vector<Object*> objects, vector<Light*> lights)
 {
   Vec3d color = BACKGROUND_COLOR;
 
   Object* hitObject;
-  if (trace(orig, dir, objects, hitObject)) {
-    color = hitObject->color;
+  Vec3d hP(0,0,0);
+
+  if (trace(orig, dir, objects, hitObject, hP))
+  {
+    color = hitObject->color * computeIllumination(hP, hitObject->getNormal(hP), lights);
   }
 
   return color;
@@ -168,16 +238,38 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   objects.push_back(sph2);
   objects.push_back(sph3);
 
+  vector<Light*> lights;
+
+  // TODO: проработать, чтобы сумма освещения не была больше 1
+  Light* light1 = new Light(Vec3d(0.2, 0.2, 0.2), AMBIENT);
+  Light* light2 = new Light(Vec3d(0.6, 0.6, 0.6), POINT);
+  light2->source = Vec3d(1,1,1);
+  Light* light3 = new Light(Vec3d(0.2, 0.2, 0.2), DIRECTIONAL);
+  light3->direction = Vec3d(1, 4, 4);
+
+  lights.push_back(light1);
+  lights.push_back(light2);
+  lights.push_back(light3);
+
+
+  /*
+          xx
+        ______    xx = zz * tg(a)
+        |   /     xx = IMG_WIDTH/2 * ?
+     zz |⏜/
+        |a/       ? = zz * tg(a) * 2 / IMG_WIDTH
+        |/        xx = (IMG_WIDTH/2) * zz * tg(a) * 2 / IMG_WIDTH
+  */
 
 
   for (int y = -IMG_HEIGHT/2; y < IMG_HEIGHT/2; y++) {
     for (int x = -IMG_WIDTH/2; x < IMG_WIDTH/2; x++) {
-      double xx = (x + 0.5) / IMG_WIDTH * xScale;
-      double yy = (y + 0.5) / IMG_HEIGHT * yScale;
       double zz = 1;
+      double xx = (x + 0.5) / IMG_WIDTH  * 2*zz * xScale;
+      double yy = (y + 0.5) / IMG_HEIGHT * 2*zz * yScale;
       Vec3d dir = normalize(Vec3d(xx, yy, zz));
 
-      Vec3d color = castRay(camera, dir, objects);
+      Vec3d color = castRay(camera, dir, objects, lights);
 
       uint32_t red = uint32_t(clamp(color.x) * 255);
       uint32_t green = uint32_t(clamp(color.y) * 255) << 8;
@@ -223,7 +315,6 @@ int main(int argc, const char** argv)
     color = RED | GREEN;
   else if(sceneId == 3)
     color = BLUE;
-
   uint32_t image[IMG_HEIGHT][IMG_WIDTH];
   for (int i = 0; i < IMG_HEIGHT; i++)
     for (int j = 0; j < IMG_WIDTH; j++)

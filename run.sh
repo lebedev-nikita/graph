@@ -1,4 +1,4 @@
-./clean
+./clean.sh
 cd tmp
 cmake ..
 make

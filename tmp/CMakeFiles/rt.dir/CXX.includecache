@@ -6,6 +6,14 @@
 
 #IncludeRegexTransform: 
 
+/Users/nikita/Work/Graph/Bitmap.cpp
+vector
+-
+fstream
+-
+cstring
+-
+
 /Users/nikita/Work/Graph/Bitmap.h
 
 /Users/nikita/Work/Graph/main.cpp
