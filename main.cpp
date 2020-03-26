@@ -16,7 +16,10 @@ const uint32_t GREEN = 0x0000FF00;
 const uint32_t BLUE  = 0x00FF0000;
 
 /*
-    TODO:
+    TODO: NEXT:
+      * добавить блики
+
+    TODO: LATER:
       * настроить так, чтобы все работало при разных ширине и высоте
         (попробовать image = malloc(...) ?)
       * POINT: сделать, чтобы свет отражался и от внутренней поверхности сферы,
@@ -25,7 +28,7 @@ const uint32_t BLUE  = 0x00FF0000;
 #define IMG_WIDTH 1024
 #define IMG_HEIGHT 1024
 #define FOV M_PI/3
-#define BACKGROUND_COLOR Vec3d(0,0.7,1)
+#define BACKGROUND_COLOR Vec3d(0,0.35,0.5)
 
 // Векторы
 
@@ -36,6 +39,8 @@ public:
   Vec3d(): x(0), y(0), z(0)
   {}
   Vec3d(double xx, double yy, double zz): x(xx), y(yy), z(zz)
+  {}
+  Vec3d(double xx): x(xx), y(xx), z(xx)
   {}
   Vec3d operator * (const double n) const
   { return Vec3d(this->x * n, this->y * n, this->z * n); }
@@ -105,22 +110,27 @@ enum LightType { AMBIENT, POINT, DIRECTIONAL};
 class Light {
 public:
   Vec3d color;
-  LightType lightType;
+  LightType type;
 
-  Vec3d source;
-  Vec3d direction;
+  Vec3d source = Vec3d(0,0,0);
+  Vec3d direction = Vec3d(0,0,0);
 
-  Light(const Vec3d &clr, LightType type) :
-    color(clr), lightType(type), source(0,0,0), direction(0,0,0) {}
+  Light(const Vec3d &clr, LightType type) : color(clr), type(type) {}
 };
 
 // Объекты
 
+enum MaterialType { DIFFUSE_AND_GLOSSY };
+
 class Object {
 public:
-  Vec3d color;
+  Vec3d color = Vec3d(1,0,0);
+  MaterialType material = DIFFUSE_AND_GLOSSY;
+  double kD = 0.8;
+  double kS = 0.2;
+  int specExp = 25;
 
-  Object() : color(1,0,0) {};
+  Object() {};
   virtual ~Object() {}
   virtual bool intersect(const Vec3d &orig, const Vec3d &dir, double &tMin, double &tMax) = 0;
   virtual Vec3d getNormal(const Vec3d &point) = 0;
@@ -160,16 +170,18 @@ Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &N, vector<Light*>
 
   for (int i = 0; i < lights.size(); i++)
   {
-    switch (lights[i]->lightType)
+    switch (lights[i]->type)
     {
       case AMBIENT:
         illumination += lights[i]->color;
         break;
       case POINT:
         lightDir = normalize(hitPoint - lights[i]->source);
-        illumination += lights[i]->color * clamp(dotProduct(-lightDir, N));
+        illumination += lights[i]->color * clamp(dotProduct(-lightDir, N)); // TODO: clamp?
         break;
       case DIRECTIONAL:
+        lightDir = lights[i]->direction;
+        illumination += lights[i]->color * clamp(dotProduct(-lightDir, N)); // TODO: clamp?
         // TODO
         break;
     }
@@ -241,11 +253,11 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
 
   vector<Object*> objects;
 
-  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 2);
+  Sphere* sph1 = new Sphere(Vec3d(0,0,16), 1.4);
   sph1->color = Vec3d(1,0,0);
-  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 2);
+  Sphere* sph2 = new Sphere(Vec3d(-3,0,16), 1.4);
   sph2->color = Vec3d(0,1,0);
-  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 2);
+  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4);
   sph3->color = Vec3d(0,0,1);
   // Sphere* sph4 = new Sphere(Vec3d(0,0,0), 16);
   // sph4->color = Vec3d(0,0.7,0.9);
@@ -258,18 +270,21 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   vector<Light*> lights;
 
   // TODO: проработать, чтобы сумма освещения не была больше 1
-  Light* light1 = new Light(Vec3d(0.2, 0.2, 0.2), AMBIENT);
-  Light* light2 = new Light(Vec3d(0.3, 0.3, 0.3), POINT);
-  light2->source = Vec3d(-4,3,10);
-  Light* light4 = new Light(Vec3d(0.3, 0.3, 0.3), POINT);
-  light4->source = Vec3d(4,3,10);
-  // Light* light3 = new Light(Vec3d(0.2, 0.2, 0.2), DIRECTIONAL);
-  // light3->direction = Vec3d(1, 4, 4);
-
+  Light* light1 = new Light(0.1, AMBIENT);
   lights.push_back(light1);
+
+  Light* light2 = new Light(0.4, POINT);
+  light2->source = Vec3d(-20, 70, -10);
   lights.push_back(light2);
+
+  Light* light4 = new Light(0.5, POINT);
+  light4->source = Vec3d(6, 6, 6);
   lights.push_back(light4);
-  // lights.push_back(light3);
+
+  Light* light3 = new Light(Vec3d(0.2), DIRECTIONAL);
+  light3->direction = normalize(Vec3d(1,-1,1));
+  lights.push_back(light3);
+
 
 
   /*
