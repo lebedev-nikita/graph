@@ -17,6 +17,7 @@ const uint32_t BLUE  = 0x00FF0000;
 
 /*
     TODO: NEXT:
+      * добавить тени
       * добавить зеркальные объекты
 
     TODO: LATER:
@@ -30,6 +31,7 @@ const uint32_t BLUE  = 0x00FF0000;
 #define IMG_HEIGHT 1024
 #define FOV M_PI/3
 #define BACKGROUND_COLOR Vec3d(0,0.35,0.5)
+#define EPS 0.0000000001
 
 /* Векторы: */
 
@@ -177,66 +179,30 @@ public:
                 hitPoint
 */
 
-Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &dir,
-                           const Object* hitObject, vector<Light*> &lights)
-{
-  Vec3d illumination(0,0,0);
-  Vec3d dirToLight;
-  Vec3d N = hitObject->getNormal(hitPoint);
-  int specExp = hitObject->specExp;
-  double kD = hitObject->kD;
-  double kS = hitObject->kS;
-
-  for (int i = 0; i < lights.size(); i++)
-  {
-    if (lights[i]->type == AMBIENT) {
-      illumination += lights[i]->color;
-    }
-    else {
-      if (lights[i]->type == POINT) {
-        dirToLight = normalize(lights[i]->source - hitPoint);
-      }
-      else if (lights[i]->type == DIRECTIONAL) {
-        dirToLight = normalize(-lights[i]->direction);
-      }
-      // diffuse
-      illumination += kD * lights[i]->color * clamp(dotProduct(dirToLight, N)); // TODO: clamp?
-
-      // specular
-      if (specExp != -1) {
-        Vec3d reflDir = normalize(2 * N * dotProduct(dirToLight, N) - dirToLight);
-        double cosA = dotProduct(reflDir, -dir);
-        if (cosA > 0) {
-          illumination += kS * lights[i]->color * pow(cosA, specExp);
-        }
-      }
-    }
-  }
-  return illumination;
-}
-
 bool trace (Vec3d orig,
             Vec3d dir,
             vector<Object*> &objects,
             Object*& hitObject,
-            Vec3d &hitPoint)
+            Vec3d &hitPoint,
+            double &tMin,
+            double &tMax)
 {
   hitObject = NULL;
   double closestDist = INFINITY;
 
   Object* obj;
-  double tMin, tMax;
+  double tmin, tmax;
 
   for (int i = 0; i < objects.size(); i++)
   {
-    if (objects[i]->intersect(orig, dir, tMin, tMax))
+    if (objects[i]->intersect(orig, dir, tmin, tmax))
     {
-      if (tMin > 0 && tMin < closestDist) {
-        closestDist = tMin;
+      if (tmin > 0 && tmin < closestDist) {
+        closestDist = tmin;
         hitObject = objects[i];
       }
-      else if (tMax > 0 && tMax < closestDist) {
-        closestDist = tMax;
+      else if (tmax > 0 && tmax < closestDist) {
+        closestDist = tmax;
         hitObject = objects[i];
       }
     }
@@ -244,6 +210,8 @@ bool trace (Vec3d orig,
 
   if (hitObject != NULL)
   {
+    tMin = tmin;
+    tMax = tmax;
     hitPoint = orig + dir * closestDist;
     return true;
   }
@@ -253,16 +221,74 @@ bool trace (Vec3d orig,
   }
 }
 
+Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &dir,
+                           const Object* hitObject,
+                           vector<Object*> &objects,
+                           vector<Light*> &lights)
+{
+  Vec3d illumination(0,0,0);
+  Vec3d dirToLight, toLight;
+  Vec3d N = hitObject->getNormal(hitPoint);
+  int specExp = hitObject->specExp;
+  double kD = hitObject->kD;
+  double kS = hitObject->kS;
+  double tMin = INFINITY;
+  double tMax = INFINITY;
+  Object* shadowObject;
+  Vec3d shadowPoint;
+  bool inShadow;
+
+  for (int i = 0; i < lights.size(); i++)
+  {
+    if (lights[i]->type == AMBIENT)
+    {
+      illumination += lights[i]->color;
+    }
+    else
+    {
+      if (lights[i]->type == POINT) {
+        toLight = lights[i]->source - hitPoint;
+        inShadow = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax) &&
+                   ((tMin > EPS && tMin < 1) || (tMax > EPS && tMax < 1));
+      }
+      else if (lights[i]->type == DIRECTIONAL) {
+        toLight = -lights[i]->direction;
+        inShadow = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax) &&
+                   (tMin > EPS || tMax > EPS);
+      }
+
+      // если источник света никто не закрывает
+      if (!inShadow)
+      {
+        // diffuse
+        dirToLight = normalize(toLight);
+        illumination += kD * lights[i]->color * clamp(dotProduct(dirToLight, N)); // TODO: clamp?
+
+        // specular
+        if (specExp != -1) {
+          Vec3d reflDir = normalize(2 * N * dotProduct(dirToLight, N) - dirToLight);
+          double cosA = dotProduct(reflDir, -dir);
+          if (cosA > 0) {
+            illumination += kS * lights[i]->color * pow(cosA, specExp);
+          }
+        }
+      }
+    }
+  }
+  return illumination;
+}
+
 Vec3d castRay(Vec3d orig, Vec3d dir, vector<Object*> objects, vector<Light*> lights)
 {
   Vec3d color = BACKGROUND_COLOR;
 
   Object* hitObject;
   Vec3d hP(0,0,0);
+  double tMin, tMax;
 
-  if (trace(orig, dir, objects, hitObject, hP))
+  if (trace(orig, dir, objects, hitObject, hP, tMin, tMax))
   {
-    color = hitObject->color * computeIllumination(hP, dir, hitObject, lights);
+    color = hitObject->color * computeIllumination(hP, dir, hitObject, objects, lights);
   }
 
   return color;
@@ -280,17 +306,17 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   /* Initialize objects: */
   vector<Object*> objects;
 
-  Sphere* sph1 = new Sphere(Vec3d(0,0,16), 1.4);
+  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1.4);
   sph1->color = Vec3d(1,0,0);
   objects.push_back(sph1);
 
-  Sphere* sph2 = new Sphere(Vec3d(-3,0,16), 1.4);
+  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4);
   sph2->color = Vec3d(0,1,0);
   objects.push_back(sph2);
 
   Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4);
   sph3->color = Vec3d(0,0,1);
-  sph3->specExp = 100;
+  // sph3->specExp = 100;
   objects.push_back(sph3);
 
 
@@ -298,19 +324,19 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   vector<Light*> lights;
 
   // TODO: проработать, чтобы сумма освещения не была больше 1
-  Light* light1 = new Light(0.1, AMBIENT);
-  lights.push_back(light1);
+  // Light* light1 = new Light(0.1, AMBIENT);
+  // lights.push_back(light1);
+  //
+  // Light* light2 = new Light(0.4, POINT);
+  // light2->source = Vec3d(-20, 70, -10);
+  // lights.push_back(light2);
+  //
+  // Light* light4 = new Light(0.5, POINT);
+  // light4->source = Vec3d(10, 10, 16);
+  // lights.push_back(light4);
 
-  Light* light2 = new Light(0.4, POINT);
-  light2->source = Vec3d(-20, 70, -10);
-  lights.push_back(light2);
-
-  Light* light4 = new Light(0.5, POINT);
-  light4->source = Vec3d(6, 6, 6);
-  lights.push_back(light4);
-
-  Light* light3 = new Light(Vec3d(0.2), DIRECTIONAL);
-  light3->direction = normalize(Vec3d(1,-1,1));
+  Light* light3 = new Light(Vec3d(1), DIRECTIONAL);
+  light3->direction = normalize(Vec3d(-1,-0.5,0));
   lights.push_back(light3);
 
 
