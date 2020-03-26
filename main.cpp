@@ -17,9 +17,10 @@ const uint32_t BLUE  = 0x00FF0000;
 
 /*
     TODO: NEXT:
-      * добавить блики
+      * добавить зеркальные объекты
 
     TODO: LATER:
+      * сгладить пиксели
       * настроить так, чтобы все работало при разных ширине и высоте
         (попробовать image = malloc(...) ?)
       * POINT: сделать, чтобы свет отражался и от внутренней поверхности сферы,
@@ -30,7 +31,7 @@ const uint32_t BLUE  = 0x00FF0000;
 #define FOV M_PI/3
 #define BACKGROUND_COLOR Vec3d(0,0.35,0.5)
 
-// Векторы
+/* Векторы: */
 
 class Vec3d {
 public:
@@ -46,6 +47,8 @@ public:
   { return Vec3d(this->x * n, this->y * n, this->z * n); }
   Vec3d operator * (const Vec3d &v) const
   { return Vec3d(this->x * v.x, this->y * v.y, this->z * v.z); }
+  friend Vec3d operator * (const float &r, const Vec3d &v)
+  { return Vec3d(v.x * r, v.y * r, v.z * r); }
   Vec3d operator - (const Vec3d &v) const
   { return Vec3d(this->x - v.x, this->y - v.y, this->z - v.z); }
   Vec3d operator - () const
@@ -61,7 +64,7 @@ public:
   }
 };
 
-// Вспомогательные функции
+/* Вспомогательные функции: */
 
 double dotProduct(const Vec3d &v, const Vec3d &u)
 { return (v.x * u.x) + (v.y * u.y) + (v.z * u.z); }
@@ -103,7 +106,7 @@ bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
   }
 }
 
-// Свет
+/* Свет: */
 
 enum LightType { AMBIENT, POINT, DIRECTIONAL};
 
@@ -118,7 +121,7 @@ public:
   Light(const Vec3d &clr, LightType type) : color(clr), type(type) {}
 };
 
-// Объекты
+/* Объекты: */
 
 enum MaterialType { DIFFUSE_AND_GLOSSY };
 
@@ -126,14 +129,14 @@ class Object {
 public:
   Vec3d color = Vec3d(1,0,0);
   MaterialType material = DIFFUSE_AND_GLOSSY;
-  double kD = 0.8;
-  double kS = 0.2;
+  double kD = 0.6;
+  double kS = 0.4;
   int specExp = 25;
 
   Object() {};
   virtual ~Object() {}
   virtual bool intersect(const Vec3d &orig, const Vec3d &dir, double &tMin, double &tMax) = 0;
-  virtual Vec3d getNormal(const Vec3d &point) = 0;
+  virtual Vec3d getNormal(const Vec3d &point) const = 0;
 };
 
 class Sphere : public Object {
@@ -155,35 +158,58 @@ public:
     return res;
   }
 
-  Vec3d getNormal(const Vec3d &point)
+  Vec3d getNormal(const Vec3d &point) const
   {
     return normalize(point - center);
   }
 };
 
-// Основные функции
+/* Основные функции: */
 
-Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &N, vector<Light*> &lights)
+/*
+          (Light)
+            |\    /|\    /|
+              \    | N  /
+               \   |   /
+  dirToLight    \  |  /  reflDir
+                 \ | /
+                  \+/
+                hitPoint
+*/
+
+Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &dir,
+                           const Object* hitObject, vector<Light*> &lights)
 {
   Vec3d illumination(0,0,0);
-  Vec3d lightDir;
+  Vec3d dirToLight;
+  Vec3d N = hitObject->getNormal(hitPoint);
+  int specExp = hitObject->specExp;
+  double kD = hitObject->kD;
+  double kS = hitObject->kS;
 
   for (int i = 0; i < lights.size(); i++)
   {
-    switch (lights[i]->type)
-    {
-      case AMBIENT:
-        illumination += lights[i]->color;
-        break;
-      case POINT:
-        lightDir = normalize(hitPoint - lights[i]->source);
-        illumination += lights[i]->color * clamp(dotProduct(-lightDir, N)); // TODO: clamp?
-        break;
-      case DIRECTIONAL:
-        lightDir = lights[i]->direction;
-        illumination += lights[i]->color * clamp(dotProduct(-lightDir, N)); // TODO: clamp?
-        // TODO
-        break;
+    if (lights[i]->type == AMBIENT) {
+      illumination += lights[i]->color;
+    }
+    else {
+      if (lights[i]->type == POINT) {
+        dirToLight = normalize(lights[i]->source - hitPoint);
+      }
+      else if (lights[i]->type == DIRECTIONAL) {
+        dirToLight = normalize(-lights[i]->direction);
+      }
+      // diffuse
+      illumination += kD * lights[i]->color * clamp(dotProduct(dirToLight, N)); // TODO: clamp?
+
+      // specular
+      if (specExp != -1) {
+        Vec3d reflDir = normalize(2 * N * dotProduct(dirToLight, N) - dirToLight);
+        double cosA = dotProduct(reflDir, -dir);
+        if (cosA > 0) {
+          illumination += kS * lights[i]->color * pow(cosA, specExp);
+        }
+      }
     }
   }
   return illumination;
@@ -236,7 +262,7 @@ Vec3d castRay(Vec3d orig, Vec3d dir, vector<Object*> objects, vector<Light*> lig
 
   if (trace(orig, dir, objects, hitObject, hP))
   {
-    color = hitObject->color * computeIllumination(hP, hitObject->getNormal(hP), lights);
+    color = hitObject->color * computeIllumination(hP, dir, hitObject, lights);
   }
 
   return color;
@@ -251,22 +277,24 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   Vec3d camera(0,0,0);
   uint32_t color;
 
+  /* Initialize objects: */
   vector<Object*> objects;
 
   Sphere* sph1 = new Sphere(Vec3d(0,0,16), 1.4);
   sph1->color = Vec3d(1,0,0);
+  objects.push_back(sph1);
+
   Sphere* sph2 = new Sphere(Vec3d(-3,0,16), 1.4);
   sph2->color = Vec3d(0,1,0);
+  objects.push_back(sph2);
+
   Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4);
   sph3->color = Vec3d(0,0,1);
-  // Sphere* sph4 = new Sphere(Vec3d(0,0,0), 16);
-  // sph4->color = Vec3d(0,0.7,0.9);
-
-  objects.push_back(sph1);
-  objects.push_back(sph2);
+  sph3->specExp = 100;
   objects.push_back(sph3);
-  // objects.push_back(sph4);
 
+
+  /* Initialize lights: */
   vector<Light*> lights;
 
   // TODO: проработать, чтобы сумма освещения не была больше 1
@@ -286,6 +314,7 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   lights.push_back(light3);
 
 
+  /* Fill image: */
 
   /*
           xx
@@ -295,7 +324,6 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
         |a/       ? = zz * tg(a) * 2 / IMG_WIDTH
         |/        xx = (IMG_WIDTH/2) * zz * tg(a) * 2 / IMG_WIDTH
   */
-
 
   for (int y = -IMG_HEIGHT/2; y < IMG_HEIGHT/2; y++) {
     for (int x = -IMG_WIDTH/2; x < IMG_WIDTH/2; x++) {
@@ -313,6 +341,12 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
       image[y+IMG_HEIGHT/2][x+IMG_HEIGHT/2] = red + green + blue;
     }
   }
+
+  /* Clean pointers: */
+  for (Light* l : lights)
+    delete l;
+  for (Object* o : objects)
+    delete o;
 }
 
 int main(int argc, const char** argv)
