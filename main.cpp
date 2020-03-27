@@ -17,8 +17,8 @@ const uint32_t BLUE  = 0x00FF0000;
 
 /*
     TODO: NEXT:
-      * добавить тени
       * добавить зеркальные объекты
+      * добавить преломление
 
     TODO: LATER:
       * сгладить пиксели
@@ -32,6 +32,7 @@ const uint32_t BLUE  = 0x00FF0000;
 #define FOV M_PI/3
 #define BACKGROUND_COLOR Vec3d(0,0.35,0.5)
 #define EPS 0.0000000001
+#define REC_DEPTH 5
 
 /* Векторы: */
 
@@ -108,6 +109,10 @@ bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
   }
 }
 
+Vec3d reflectRay(const Vec3d &R, const Vec3d &N) {
+    return 2*N*dotProduct(R, N) - R;
+}
+
 /* Свет: */
 
 enum LightType { AMBIENT, POINT, DIRECTIONAL};
@@ -131,8 +136,9 @@ class Object {
 public:
   Vec3d color = Vec3d(1,0,0);
   MaterialType material = DIFFUSE_AND_GLOSSY;
-  double kD = 0.6;
-  double kS = 0.4;
+  double kDiffuse = 0.4;
+  double kSpecular = 0.3;
+  double kReflection = 0.3; // TODO: нужно ли?
   int specExp = 25;
 
   Object() {};
@@ -230,8 +236,8 @@ Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &dir,
   Vec3d dirToLight, toLight;
   Vec3d N = hitObject->getNormal(hitPoint);
   int specExp = hitObject->specExp;
-  double kD = hitObject->kD;
-  double kS = hitObject->kS;
+  double kDiffuse = hitObject->kDiffuse;
+  double kSpecular = hitObject->kSpecular;
   double tMin = INFINITY;
   double tMax = INFINITY;
   Object* shadowObject;
@@ -262,14 +268,14 @@ Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &dir,
       {
         // diffuse
         dirToLight = normalize(toLight);
-        illumination += kD * lights[i]->color * clamp(dotProduct(dirToLight, N)); // TODO: clamp?
+        illumination += kDiffuse * lights[i]->color * clamp(dotProduct(dirToLight, N)); // TODO: clamp?
 
         // specular
         if (specExp != -1) {
-          Vec3d reflDir = normalize(2 * N * dotProduct(dirToLight, N) - dirToLight);
+          Vec3d reflDir = normalize(reflectRay(dirToLight, N));
           double cosA = dotProduct(reflDir, -dir);
           if (cosA > 0) {
-            illumination += kS * lights[i]->color * pow(cosA, specExp);
+            illumination += kSpecular * lights[i]->color * pow(cosA, specExp);
           }
         }
       }
@@ -278,7 +284,11 @@ Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &dir,
   return illumination;
 }
 
-Vec3d castRay(Vec3d orig, Vec3d dir, vector<Object*> objects, vector<Light*> lights)
+Vec3d castRay(Vec3d orig,
+              Vec3d dir,
+              vector<Object*> objects,
+              vector<Light*> lights,
+              int recDepth)
 {
   Vec3d color = BACKGROUND_COLOR;
 
@@ -288,6 +298,10 @@ Vec3d castRay(Vec3d orig, Vec3d dir, vector<Object*> objects, vector<Light*> lig
 
   if (trace(orig, dir, objects, hitObject, hP, tMin, tMax))
   {
+    color = Vec3d(0);
+    // color += hitObject->kDiffuse * computeDiffuse();
+    // color += hitObject->kSpecular * computeSpecular();
+    // color += hitObject->kReflection * castRay();
     color = hitObject->color * computeIllumination(hP, dir, hitObject, objects, lights);
   }
 
@@ -324,16 +338,16 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   vector<Light*> lights;
 
   // TODO: проработать, чтобы сумма освещения не была больше 1
-  // Light* light1 = new Light(0.1, AMBIENT);
-  // lights.push_back(light1);
-  //
-  // Light* light2 = new Light(0.4, POINT);
-  // light2->source = Vec3d(-20, 70, -10);
-  // lights.push_back(light2);
-  //
-  // Light* light4 = new Light(0.5, POINT);
-  // light4->source = Vec3d(10, 10, 16);
-  // lights.push_back(light4);
+  Light* light1 = new Light(0.1, AMBIENT);
+  lights.push_back(light1);
+
+  Light* light2 = new Light(0.4, POINT);
+  light2->source = Vec3d(-20, 70, -10);
+  lights.push_back(light2);
+
+  Light* light4 = new Light(0.5, POINT);
+  light4->source = Vec3d(10, 10, 16);
+  lights.push_back(light4);
 
   Light* light3 = new Light(Vec3d(1), DIRECTIONAL);
   light3->direction = normalize(Vec3d(-1,-0.5,0));
@@ -358,7 +372,7 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
       double yy = (y + 0.5) / IMG_HEIGHT * 2*zz * yScale;
       Vec3d dir = normalize(Vec3d(xx, yy, zz));
 
-      Vec3d color = castRay(camera, dir, objects, lights);
+      Vec3d color = castRay(camera, dir, objects, lights, REC_DEPTH);
 
       uint32_t red = uint32_t(clamp(color.x) * 255);
       uint32_t green = uint32_t(clamp(color.y) * 255) << 8;
