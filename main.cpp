@@ -17,9 +17,7 @@ const uint32_t BLUE  = 0x00FF0000;
 
 /*
     TODO: NEXT:
-      * добавить зеркальные объекты
-      * добавить преломление
-
+      * добавить меши
     TODO: LATER:
       * сгладить пиксели
       * настроить так, чтобы все работало при разных ширине и высоте
@@ -30,10 +28,9 @@ const uint32_t BLUE  = 0x00FF0000;
 #define IMG_WIDTH 1024
 #define IMG_HEIGHT 1024
 #define FOV M_PI/3
-// #define BACKGROUND_COLOR Vec3d(0,0.35,0.5)
-#define BACKGROUND_COLOR Vec3d(0)
+#define BACKGROUND_COLOR Vec3d(1)
 #define EPS 0.0000001
-#define REC_DEPTH 5
+#define REC_DEPTH 3
 
 /* Векторы: */
 
@@ -341,11 +338,15 @@ Vec3d castRay(Vec3d orig,
   Vec3d hitPoint(0,0,0);
   double tMin, tMax;
   Vec3d objColor;
+  int specExp;
   double kD;
   double kS;
-  int specExp;
+  double kR;
   Vec3d N;
+  Vec3d reflectedDir;
   bool inShadow[lights.size()];
+
+  if (recDepth == 0) return BACKGROUND_COLOR;
 
   if (trace(orig, dir, objects, hitObject, hitPoint, tMin, tMax))
   {
@@ -353,17 +354,19 @@ Vec3d castRay(Vec3d orig,
     specExp  = hitObject->specExp;
     kD = hitObject->kDiffuse;
     kS = hitObject->kSpecular;
+    kR = hitObject->kReflection;
     N  = hitObject->getNormal(hitPoint);
+    reflectedDir = reflectRay(-normalize(dir), N);
 
     computeShadows(hitPoint, N, inShadow, objects, lights);
 
     retColor = Vec3d(0);
     retColor += objColor * kD * computeDiffuse(hitPoint, N, lights, inShadow);
     retColor += objColor * kS * computeSpecular(hitPoint, dir, N, specExp, lights, inShadow);
+    retColor += objColor * kR * castRay(hitPoint, reflectedDir, objects, lights, recDepth-1);
 
     // retColor += hitObject->kReflection * castRay();
 
-    // retColor = hitObject->color * computeIllumination(hitPoint, dir, hitObject, objects, lights);
   }
 
   return retColor;
@@ -386,7 +389,7 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   objects.push_back(sph1);
 
   Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4);
-  sph2->color = Vec3d(0,1,0);
+  sph2->color = Vec3d(1);
   objects.push_back(sph2);
 
   Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4);
