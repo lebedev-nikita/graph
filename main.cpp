@@ -17,8 +17,6 @@ const uint32_t BLUE  = 0x00FF0000;
 
 /*
     TODO: NEXT:
-      * разбить вычисление освещенности
-      * добавить вычисление inShadow
       * добавить зеркальные объекты
       * добавить преломление
 
@@ -34,7 +32,7 @@ const uint32_t BLUE  = 0x00FF0000;
 #define FOV M_PI/3
 // #define BACKGROUND_COLOR Vec3d(0,0.35,0.5)
 #define BACKGROUND_COLOR Vec3d(0)
-#define EPS 0.0000000001
+#define EPS 0.0000001
 #define REC_DEPTH 5
 
 /* Векторы: */
@@ -208,10 +206,14 @@ bool trace (Vec3d orig,
     {
       if (tmin > 0 && tmin < closestDist) {
         closestDist = tmin;
+        tMin = tmin;
+        tMax = tmax;
         hitObject = objects[i];
       }
       else if (tmax > 0 && tmax < closestDist) {
         closestDist = tmax;
+        tMin = tmin;
+        tMax = tmax;
         hitObject = objects[i];
       }
     }
@@ -219,9 +221,7 @@ bool trace (Vec3d orig,
 
   if (hitObject != NULL)
   {
-    tMin = tmin;
-    tMax = tmax;
-    hitPoint = orig + dir * closestDist;
+    hitPoint = orig + dir * (closestDist - EPS);
     return true;
   }
   else
@@ -229,64 +229,6 @@ bool trace (Vec3d orig,
     return false;
   }
 }
-
-Vec3d computeIllumination (const Vec3d &hitPoint, const Vec3d &dir,
-                           const Object* hitObject,
-                           const vector<Object*> &objects,
-                           const vector<Light*> &lights)
-{
-  Vec3d illumination(0,0,0);
-  Vec3d dirToLight, toLight;
-  Vec3d N = hitObject->getNormal(hitPoint);
-  int specExp = hitObject->specExp;
-  double kDiffuse = hitObject->kDiffuse;
-  double kSpecular = hitObject->kSpecular;
-  double tMin = INFINITY;
-  double tMax = INFINITY;
-  Object* shadowObject;
-  Vec3d shadowPoint;
-  bool inShadow;
-
-  for (int i = 0; i < lights.size(); i++)
-  {
-    if (lights[i]->type == AMBIENT)
-    {
-      illumination += kDiffuse * lights[i]->color;
-    }
-    else
-    {
-      if (lights[i]->type == POINT) {
-        toLight = lights[i]->source - hitPoint;
-        inShadow = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax) &&
-                   ((tMin > EPS && tMin < 1) || (tMax > EPS && tMax < 1));
-      }
-      else if (lights[i]->type == DIRECTIONAL) {
-        toLight = -lights[i]->direction;
-        inShadow = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax) &&
-                   (tMin > EPS || tMax > EPS);
-      }
-
-      // если источник света никто не закрывает
-      if (!inShadow)
-      {
-        dirToLight = normalize(toLight);
-        // diffuse
-        illumination += kDiffuse * lights[i]->color * clamp(dotProduct(dirToLight, N)); // TODO: clamp?
-
-        // specular
-        if (specExp != -1) {
-          Vec3d reflDir = normalize(reflectRay(dirToLight, N));
-          double cosA = dotProduct(reflDir, -dir);
-          if (cosA > 0) {
-            illumination += kSpecular * lights[i]->color * pow(cosA, specExp);
-          }
-        }
-      }
-    }
-  }
-  return illumination;
-}
-
 void computeShadows(const Vec3d &hitPoint,
                     const Vec3d &N,
                     bool inShadow[],
@@ -296,7 +238,7 @@ void computeShadows(const Vec3d &hitPoint,
   Vec3d dirToLight, toLight;
   double tMin = INFINITY;
   double tMax = INFINITY;
-  Object* shadowObject;
+  Object* shadowObject; // здесь не используется, это просто затычка
   Vec3d shadowPoint;
 
   for (int i = 0; i < lights.size(); i++)
@@ -308,12 +250,12 @@ void computeShadows(const Vec3d &hitPoint,
       case POINT:
         toLight = lights[i]->source - hitPoint;
         inShadow[i] = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax)
-                      && ((tMin > EPS && tMin < 1) || (tMax > EPS && tMax < 1));
+                      && ((tMin > 0 && tMin <= 1) || (tMax > 0 && tMax <= 1));
         break;
       case DIRECTIONAL:
         toLight = -lights[i]->direction;
         inShadow[i] = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax)
-                      && (tMin > EPS || tMax > EPS);
+                      && (tMin > 0 || tMax > 0);
         break;
     }
   }
@@ -452,9 +394,9 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   // sph3->specExp = 100;
   objects.push_back(sph3);
 
-  // Sphere* bigSph = new Sphere(Vec3d(0,-160,16), 156);
-  // bigSph->color = Vec3d(1,1,1);
-  // objects.push_back(bigSph);
+  Sphere* bigSph = new Sphere(Vec3d(0,-160,16), 156);
+  bigSph->color = Vec3d(1,1,1);
+  objects.push_back(bigSph);
 
   /* Initialize lights: */
   vector<Light*> lights;
