@@ -17,7 +17,9 @@ const uint32_t BLUE  = 0x00FF0000;
 
 /*
     TODO: NEXT:
+      * добавить преломление
       * добавить меши
+      * распараллелить
     TODO: LATER:
       * сгладить пиксели
       * настроить так, чтобы все работало при разных ширине и высоте
@@ -138,10 +140,10 @@ class Object {
 public:
   Vec3d color = Vec3d(1,1,1);
   MaterialType material = DIFFUSE_AND_GLOSSY;
-  double kDiffuse = 0.4;
-  double kSpecular = 0.3;
-  double kReflection = 0.3; // TODO: нужно ли?
-  int specExp = 25;
+  double kDiffuse;
+  double kSpecular;
+  double kReflection;
+  int specExp;
 
   Object(MaterialType m = DIFFUSE_AND_GLOSSY)
   {
@@ -154,7 +156,7 @@ public:
     }
     else if (m == DIFFUSE_AND_GLOSSY) {
       kDiffuse = 0.5;
-      kSpecular = 0.5;
+      kSpecular = 1;
       kReflection = 0;
       specExp = 25;
     }
@@ -165,9 +167,9 @@ public:
       specExp = -1;
     }
     else if (m == ALL_IN_ONE) {
-      kDiffuse = 0.4;
-      kSpecular = 0.3;
-      kReflection = 0.3;
+      kDiffuse = 0.5;
+      kSpecular = 100;
+      kReflection = 1;
       specExp = 25;
     }
   }
@@ -394,12 +396,19 @@ Vec3d castRay(Vec3d orig,
     computeShadows(hitPoint, N, inShadow, objects, lights);
 
     retColor = Vec3d(0);
+    double k = 1;
+
     if (kD)
-      retColor += objColor * kD * computeDiffuse(hitPoint, N, lights, inShadow);
+      retColor += objColor * k * kD * computeDiffuse(hitPoint, N, lights, inShadow);
+    k *= clamp(1-kD);
+
     if (specExp != -1 && kS)
-      retColor += objColor * kS * computeSpecular(hitPoint, dir, N, specExp, lights, inShadow);
+      retColor += objColor * kS  * computeSpecular(hitPoint, dir, N, specExp, lights, inShadow);
+    k *= clamp(1-kS);
+
     if (kR)
-      retColor += objColor * kR * castRay(hitPoint, reflectedDir, objects, lights, recDepth-1);
+      retColor += objColor * k * kR * castRay(hitPoint, reflectedDir, objects, lights, recDepth-1);
+    k *= clamp(1-kR);
   }
 
   return retColor;
@@ -421,17 +430,16 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   sph1->color = Vec3d(1,0,1);
   objects.push_back(sph1);
 
-  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4, ALL_IN_ONE);
-  sph2->color = Vec3d(0.9,0.9,0);
-  sph2->kSpecular = 1;
+  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4, DIFFUSE_AND_GLOSSY);
+  sph2->color = Vec3d(1,1,0);
   objects.push_back(sph2);
 
-  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4, DIFFUSE);
-  sph3->color = Vec3d(0,0,1);
+  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4, DIFFUSE_AND_GLOSSY);
+  sph3->color = Vec3d(0,1,1);
   objects.push_back(sph3);
 
-  Sphere* bigSph = new Sphere(Vec3d(0,-160,16), 156, MIRROR);
-  bigSph->color = Vec3d(0.5);
+  Sphere* bigSph = new Sphere(Vec3d(0,-160,16), 156, DIFFUSE_AND_GLOSSY);
+  bigSph->color = Vec3d(1);
   objects.push_back(bigSph);
 
   /* Initialize lights: */
