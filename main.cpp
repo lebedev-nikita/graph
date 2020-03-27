@@ -323,90 +323,65 @@ Vec3d computeSpecular (const Vec3d &hitPoint,
                        const Vec3d &dir,
                        Vec3d N,
                        int specExp,
-                       const vector<Object*> &objects,
-                       const vector<Light*> &lights)
+                       const vector<Light*> &lights,
+                       bool inShadow[])
 {
-  Vec3d retColor(0,0,0);
-  Vec3d dirToLight, toLight;
-  double tMin = INFINITY;
-  double tMax = INFINITY;
-  Object* shadowObject;
-  Vec3d shadowPoint;
-  bool inShadow;
+  Vec3d retColor(0);
+  Vec3d dirToLight;
 
   for (int i = 0; i < lights.size(); i++)
   {
-    if (lights[i]->type != AMBIENT)
+    if (!inShadow[i])
     {
-      if (lights[i]->type == POINT) {
-        toLight = lights[i]->source - hitPoint;
-        inShadow = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax) &&
-                   ((tMin > EPS && tMin < 1) || (tMax > EPS && tMax < 1));
-      }
-      else if (lights[i]->type == DIRECTIONAL) {
-        toLight = -lights[i]->direction;
-        inShadow = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax) &&
-                   (tMin > EPS || tMax > EPS);
+      switch (lights[i]->type) {
+        case AMBIENT:
+          continue;
+        case POINT:
+          dirToLight = normalize(lights[i]->source - hitPoint);
+          break;
+        case DIRECTIONAL:
+          dirToLight = normalize(-lights[i]->direction);
+          break;
       }
 
-      // если источник света никто не закрывает
-      if (!inShadow)
-      {
-        // specular
-        if (specExp != -1) {
-          dirToLight = normalize(toLight);
-          Vec3d reflDir = normalize(reflectRay(dirToLight, N));
-          double cosA = clamp(dotProduct(reflDir, -dir));
-          if (cosA > 0) {
-            retColor += lights[i]->color * pow(cosA, specExp);
-          }
+      if (specExp != -1) {
+        Vec3d reflDir = normalize(reflectRay(dirToLight, N));
+        double cosA = clamp(dotProduct(reflDir, -dir));
+        if (cosA > 0) {
+          retColor += lights[i]->color * pow(cosA, specExp);
         }
       }
     }
   }
+
   return retColor;
 }
 
 Vec3d computeDiffuse (const Vec3d &hitPoint,
-                      const Vec3d &dir,
                       const Vec3d &N,
-                      vector<Object*> &objects,
-                      vector<Light*> &lights )
+                      vector<Light*> &lights,
+                      bool inShadow[])
 {
-  Vec3d retColor(0,0,0);
-  Vec3d dirToLight, toLight;
-  double tMin = INFINITY;
-  double tMax = INFINITY;
-  Object* shadowObject;
-  Vec3d shadowPoint;
-  bool inShadow;
+  Vec3d retColor(0);
+  Vec3d dirToLight;
 
   for (int i = 0; i < lights.size(); i++)
   {
-    if (lights[i]->type == AMBIENT)
+    if (!inShadow[i])
     {
-      retColor += lights[i]->color;
-    }
-    else
-    {
-      if (lights[i]->type == POINT) {
-        toLight = lights[i]->source - hitPoint;
-        inShadow = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax)
-        && ((tMin > EPS && tMin < 1) || (tMax > EPS && tMax < 1));
-      }
-      else if (lights[i]->type == DIRECTIONAL) {
-        toLight = -lights[i]->direction;
-        inShadow = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax)
-        && (tMin > EPS || tMax > EPS);
+      switch (lights[i]->type) {
+        case AMBIENT:
+          retColor += lights[i]->color;
+          continue;
+        case POINT:
+          dirToLight = normalize(lights[i]->source - hitPoint);
+          break;
+        case DIRECTIONAL:
+          dirToLight = normalize(-lights[i]->direction);
+          break;
       }
 
-      // если источник света никто не закрывает
-      if (!inShadow)
-      {
-        dirToLight = normalize(toLight);
-        // diffuse
-        retColor += lights[i]->color * clamp(dotProduct(dirToLight, N)); // TODO: clamp?
-      }
+      retColor += lights[i]->color * clamp(dotProduct(dirToLight, N)); // TODO: clamp?
     }
   }
   return retColor;
@@ -437,12 +412,12 @@ Vec3d castRay(Vec3d orig,
     kD = hitObject->kDiffuse;
     kS = hitObject->kSpecular;
     N  = hitObject->getNormal(hitPoint);
-    // computeShadows(hitPoint, );
+
     computeShadows(hitPoint, N, inShadow, objects, lights);
 
     retColor = Vec3d(0);
-    retColor += objColor * kD * computeDiffuse(hitPoint, dir, N, objects, lights);
-    retColor += objColor * kS * computeSpecular(hitPoint, dir, N, specExp, objects, lights);
+    retColor += objColor * kD * computeDiffuse(hitPoint, N, lights, inShadow);
+    retColor += objColor * kS * computeSpecular(hitPoint, dir, N, specExp, lights, inShadow);
 
     // retColor += hitObject->kReflection * castRay();
 
