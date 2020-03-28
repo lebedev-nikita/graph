@@ -19,15 +19,16 @@ const uint32_t BLUE  = 0x00FF0000;
 
 /*
     TODO: NEXT:
-      * добавить преломление
       * добавить меши
       * распараллелить
     TODO: LATER:
       * сгладить пиксели
+      * переиначить функцию kFresnel
       * настроить так, чтобы все работало при разных ширине и высоте
         (попробовать image = malloc(...) ?)
       * POINT: сделать, чтобы свет отражался и от внутренней поверхности сферы,
         если она окружает камеру
+      * Написать в README, какими источниками пользовался
 */
 #define IMG_WIDTH 1024
 #define IMG_HEIGHT 1024
@@ -124,27 +125,29 @@ bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
   }
 }
 
-double kFresnel(const Vec3d &I, const Vec3d &N, const double &ior)
+double kFresnel(const Vec3d &I, const Vec3d &N, const double ior)
 {
-    double kr;
-    double cosi = clamp(dotProduct(I, N), -1, 1);
-    double etai = 1, etat = ior;
-    if (cosi > 0) {  std::swap(etai, etat); }
-    // Compute sini using Snell's law
-    double sint = etai / etat * ((cosi * cosi < 1)?sqrt(1 - cosi * cosi):0);
-    // Total internal reflection
-    if (sint >= 1) {
-        kr = 1;
-    }
-    else {
-        double cost = (sint * sint < 1)?sqrtf(1 - sint * sint):0;
-        cosi = abs(cosi);
-        double Rs = ((etat * cosi) - (etai * cost)) / ((etat * cosi) + (etai * cost));
-        double Rp = ((etai * cosi) - (etat * cost)) / ((etai * cosi) + (etat * cost));
-        kr = (Rs * Rs + Rp * Rp) / 2;
-    }
-    // kt = 1 - kr;
-    return kr;
+  if (ior == -1) { return 0; }
+
+  double kr;
+  double cosi = clamp(dotProduct(I, N), -1, 1);
+  double etai = 1, etat = ior;
+  if (cosi > 0) { swap(etai, etat); }
+
+  double sint = etai / etat * ((cosi * cosi < 1)?sqrt(1 - cosi * cosi):0);
+
+  if (sint >= 1) {
+      kr = 1;
+  }
+  else {
+      double cost = (sint * sint < 1)?sqrtf(1 - sint * sint):0;
+      cosi = abs(cosi);
+      double Rs = ((etat * cosi) - (etai * cost)) / ((etat * cosi) + (etai * cost));
+      double Rp = ((etai * cosi) - (etat * cost)) / ((etai * cosi) + (etat * cost));
+      kr = (Rs * Rs + Rp * Rp) / 2;
+  }
+
+  return kr;
 }
 
 /* Свет: */
@@ -169,49 +172,31 @@ enum MaterialType { DIFFUSE, DIFFUSE_AND_GLOSSY, MIRROR, ALL_IN_ONE, GLASS };
 
 class Object {
 public:
-  Vec3d color = Vec3d(1,1,1);
-  MaterialType material = DIFFUSE_AND_GLOSSY;
+  Vec3d color;
+  MaterialType material;
   double kDiffuse;
-  double kSpecular;
-  double kReflection;
   int specExp;
   double ior;
 
-  Object(MaterialType m = DIFFUSE_AND_GLOSSY)
+  Object(MaterialType m = DIFFUSE_AND_GLOSSY) : material(m), color(1)
   {
-    material = m;
     if (m == DIFFUSE) {
       kDiffuse = 1;
-      kSpecular = 0;
-      kReflection = 0;
       specExp = -1;
       ior = -1;
     }
     else if (m == DIFFUSE_AND_GLOSSY) {
       kDiffuse = 0.5;
-      kSpecular = 1;
-      kReflection = 0;
       specExp = 25;
       ior = -1;
     }
     else if (m == MIRROR) {
       kDiffuse = 0;
-      kSpecular = 0;
-      kReflection = 1;
       specExp = -1;
-      ior = -1;
-    }
-    else if (m == ALL_IN_ONE) {
-      kDiffuse = 0.5;
-      kSpecular = 0.5;
-      kReflection = 1;
-      specExp = 25;
       ior = -1;
     }
     else if(m == GLASS) {
       kDiffuse = 0;
-      kSpecular = 0;
-      kReflection = 0.2;
       specExp = -1;
       ior = 1.3;
 
@@ -448,8 +433,6 @@ Vec3d castRay(Vec3d orig,
     objColor = hitObject->color;
     specExp  = hitObject->specExp;
     kD = hitObject->kDiffuse;
-    kS = hitObject->kSpecular;
-    kR = hitObject->kReflection;
     ior = hitObject->ior;
     N  = hitObject->getNormal(hitPoint);
     reflectedDir = reflectRay(-normalize(dir), N);
@@ -466,32 +449,28 @@ Vec3d castRay(Vec3d orig,
     computeShadows(reflectionOrig, N, inShadow, objects, lights);
 
     retColor = Vec3d(0);
-    k = 1;
 
     if (kD)
-      retColor += k * kD * computeDiffuse(reflectionOrig, N, lights, inShadow);
-    k *= clamp(1-kD);
+    {
+      retColor += kD * computeDiffuse(reflectionOrig, N, lights, inShadow);
 
-    if (specExp != -1 && kS)
-      retColor += kS  * computeSpecular(reflectionOrig, -normalize(dir) , N, specExp, lights, inShadow);
-    k *= clamp(1-kS);
-
-    if (false);
-    else {
-      double kF = kFresnel(dir, N, hitObject->ior);
+      if (specExp != -1 && (1-kD))
+        retColor += (1-kD)  * computeSpecular(reflectionOrig, -normalize(dir) , N, specExp, lights, inShadow);
+    }
+    else if (ior == -1)
+    {
+        retColor += castRay(reflectionOrig, reflectedDir, objects, lights, recDepth-1);
+    }
+    else
+    {
+      kR = kFresnel(dir, N, hitObject->ior);
       if (kR)
-      retColor += k * kR * castRay(reflectionOrig, reflectedDir, objects, lights, recDepth-1);
-      k *= clamp(1-kR);
+        retColor += kR * castRay(reflectionOrig, reflectedDir, objects, lights, recDepth-1);
 
-      if (ior != -1) {
+      if (1-kR)
+      {
         Vec3d refractionDirection = normalize(refractRay(dir, N, hitObject->ior));
-        // Vec3d refractionColor = castRay(refractionRayOrig, refractionDirection, objects, lights, options, depth + 1, 1);
-        // double kr;
-        // fresnel(dir, N, hitObject->ior, kr);
-        // hitColor = refractionColor * (1 - kr);
-
-        retColor += k * castRay(refractionOrig, refractionDirection, objects, lights, recDepth-1);
-
+        retColor += (1-kR) * castRay(refractionOrig, refractionDirection, objects, lights, recDepth-1);
       }
     }
 
@@ -512,7 +491,7 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   /* Initialize objects: */
   vector<Object*> objects;
 
-  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1.4, GLASS);
+  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1.4, MIRROR);
   sph1->color = Vec3d(1,0,1);
   objects.push_back(sph1);
 
@@ -524,7 +503,7 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   sph3->color = Vec3d(0,1,1);
   objects.push_back(sph3);
 
-  Sphere* backSph = new Sphere(Vec3d(0, 0, 30), 5, ALL_IN_ONE);
+  Sphere* backSph = new Sphere(Vec3d(0, 0, 30), 5, DIFFUSE_AND_GLOSSY);
   backSph->color = Vec3d(1);
   objects.push_back(backSph);
 
