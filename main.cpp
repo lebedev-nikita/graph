@@ -71,20 +71,17 @@ public:
 
 /* Вспомогательные функции: */
 
-double dotProduct(const Vec3d &v, const Vec3d &u)
+inline double dotProduct(const Vec3d &v, const Vec3d &u)
 { return (v.x * u.x) + (v.y * u.y) + (v.z * u.z); }
 
-Vec3d normalize(const Vec3d &vec)
-{
-  double len = sqrt(dotProduct(vec, vec));
-  return vec * (1/len);
-}
+inline Vec3d normalize(const Vec3d &vec)
+{ return vec * (1 / sqrt(dotProduct(vec,vec))); }
 
-double clamp(double num) {
-  if (num < 0) return 0;
-  if (num > 1) return 1;
-  else         return num;
-}
+inline double clamp(double num)
+{ return (num < 0)?0:(num>1)?1:num; }
+
+inline Vec3d reflectRay(const Vec3d &R, const Vec3d &N)
+{ return 2*N*dotProduct(R, N) - R; }
 
 bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
 {
@@ -103,16 +100,12 @@ bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
     t2 = (-b - sqrtDiscr) / (2*a);
 
     if (t1 > t2)
-      swap(t1, t2);
+    swap(t1, t2);
 
     tMin = t1;
     tMax = t2;
     return true;
   }
-}
-
-Vec3d reflectRay(const Vec3d &R, const Vec3d &N) {
-    return 2*N*dotProduct(R, N) - R;
 }
 
 
