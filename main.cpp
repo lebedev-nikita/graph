@@ -217,8 +217,8 @@ public:
                 hitPoint
 */
 
-bool trace (Vec3d orig,
-            Vec3d dir,
+bool trace (const Vec3d &orig,
+            const Vec3d &dir,
             const vector<Object*> &objects,
             Object*& hitObject,
             Vec3d &hitPoint,
@@ -261,6 +261,29 @@ bool trace (Vec3d orig,
   }
 }
 
+bool hasIntersection(Vec3d orig,
+                     Vec3d dir,
+                     const vector<Object*> &objects,
+                     LightType lightType)
+{
+  double tmin, tmax;
+
+  if (lightType == AMBIENT)
+    return false;
+
+  for (int i = 0; i < objects.size(); i++)
+  {
+    if (objects[i]->intersect(orig, dir, tmin, tmax))
+    {
+      if (lightType == DIRECTIONAL && (tmin > 0 || tmax > 0))
+        return true;
+      else if (lightType == POINT && ((tmin > 0 && tmin < 1) || (tmax > 0 && tmax < 1)))
+        return true;
+    }
+  }
+  return false;
+}
+
 void computeShadows(const Vec3d &hitPoint,
                     const Vec3d &N,
                     bool inShadow[],
@@ -268,28 +291,21 @@ void computeShadows(const Vec3d &hitPoint,
                     const vector<Light*> &lights)
 {
   Vec3d dirToLight, toLight;
-  double tMin = INFINITY;
-  double tMax = INFINITY;
-  Object* shadowObject; // здесь не используется, это просто затычка
-  Vec3d shadowPoint;
 
   for (int i = 0; i < lights.size(); i++)
   {
     switch (lights[i]->type) {
       case AMBIENT:
         inShadow[i] = false;
-        break;
+        continue;
       case POINT:
         toLight = lights[i]->source - hitPoint;
-        inShadow[i] = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax)
-                      && ((tMin > 0 && tMin <= 1) || (tMax > 0 && tMax <= 1));
         break;
       case DIRECTIONAL:
         toLight = -lights[i]->direction;
-        inShadow[i] = trace(hitPoint, toLight, objects, shadowObject, shadowPoint, tMin, tMax)
-                      && (tMin > 0 || tMax > 0);
         break;
     }
+    inShadow[i] = hasIntersection(hitPoint, toLight, objects, lights[i]->type);
   }
 }
 
