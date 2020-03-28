@@ -6,6 +6,8 @@
 #include <unordered_map>
 
 #include <cmath>
+// #include <omp.h>
+// #include "/usr/local/opt/libomp/include/omp.h"
 
 #include "Bitmap.h"
 
@@ -30,7 +32,7 @@ const uint32_t BLUE  = 0x00FF0000;
 #define IMG_WIDTH 1024
 #define IMG_HEIGHT 1024
 #define FOV M_PI/3
-#define BACKGROUND_COLOR Vec3d(1)
+#define BACKGROUND_COLOR Vec3d(0)
 #define EPS 0.0000001
 #define REC_DEPTH 3
 
@@ -51,7 +53,7 @@ public:
   { return Vec3d(this->x * n, this->y * n, this->z * n); }
   Vec3d operator * (const Vec3d &v) const
   { return Vec3d(this->x * v.x, this->y * v.y, this->z * v.z); }
-  friend Vec3d operator * (const float &r, const Vec3d &v)
+  friend Vec3d operator * (const double &r, const Vec3d &v)
   { return Vec3d(v.x * r, v.y * r, v.z * r); }
   Vec3d operator - (const Vec3d &v) const
   { return Vec3d(this->x - v.x, this->y - v.y, this->z - v.z); }
@@ -66,6 +68,8 @@ public:
     this->z += v.z;
     return *this;
   }
+  friend inline double abs(const Vec3d &v)
+  { return sqrt(v.x*v.x+v.y*v.y+v.z*v.z); }
 };
 
 
@@ -77,11 +81,23 @@ inline double dotProduct(const Vec3d &v, const Vec3d &u)
 inline Vec3d normalize(const Vec3d &vec)
 { return vec * (1 / sqrt(dotProduct(vec,vec))); }
 
-inline double clamp(double num)
-{ return (num < 0)?0:(num>1)?1:num; }
+inline double clamp(double num, double low = 0, double hi = 1)
+{ return (num < low)?low:(num>hi)?hi:num; }
 
-inline Vec3d reflectRay(const Vec3d &R, const Vec3d &N)
-{ return 2*N*dotProduct(R, N) - R; }
+inline Vec3d reflectRay(const Vec3d &I, const Vec3d &N)
+{ return 2*N*dotProduct(I, N) - I; }
+
+Vec3d refractRay(const Vec3d &I, const Vec3d &N, const double &ior)
+{
+    // считаем, что abs(I) == 1
+    double cosi = dotProduct(I, N);
+    double etai = 1, etat = ior;
+    Vec3d n = N;
+    if (cosi < 0) { cosi = -cosi; } else { swap(etai, etat); n= -N; }
+    double eta = etai / etat;
+    double k = 1 - eta * eta * (1 - cosi * cosi);
+    return k < 0 ? 0 : eta * I + (eta * cosi - sqrt(k)) * n;
+}
 
 bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
 {
@@ -108,6 +124,28 @@ bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
   }
 }
 
+double kFresnel(const Vec3d &I, const Vec3d &N, const double &ior)
+{
+    double kr;
+    double cosi = clamp(dotProduct(I, N), -1, 1);
+    double etai = 1, etat = ior;
+    if (cosi > 0) {  std::swap(etai, etat); }
+    // Compute sini using Snell's law
+    double sint = etai / etat * ((cosi * cosi < 1)?sqrt(1 - cosi * cosi):0);
+    // Total internal reflection
+    if (sint >= 1) {
+        kr = 1;
+    }
+    else {
+        double cost = (sint * sint < 1)?sqrtf(1 - sint * sint):0;
+        cosi = abs(cosi);
+        double Rs = ((etat * cosi) - (etai * cost)) / ((etat * cosi) + (etai * cost));
+        double Rp = ((etai * cosi) - (etat * cost)) / ((etai * cosi) + (etat * cost));
+        kr = (Rs * Rs + Rp * Rp) / 2;
+    }
+    // kt = 1 - kr;
+    return kr;
+}
 
 /* Свет: */
 
@@ -127,7 +165,7 @@ public:
 
 /* Объекты: */
 
-enum MaterialType { DIFFUSE, DIFFUSE_AND_GLOSSY, MIRROR, ALL_IN_ONE };
+enum MaterialType { DIFFUSE, DIFFUSE_AND_GLOSSY, MIRROR, ALL_IN_ONE, GLASS };
 
 class Object {
 public:
@@ -137,6 +175,7 @@ public:
   double kSpecular;
   double kReflection;
   int specExp;
+  double ior;
 
   Object(MaterialType m = DIFFUSE_AND_GLOSSY)
   {
@@ -146,24 +185,36 @@ public:
       kSpecular = 0;
       kReflection = 0;
       specExp = -1;
+      ior = -1;
     }
     else if (m == DIFFUSE_AND_GLOSSY) {
       kDiffuse = 0.5;
       kSpecular = 1;
       kReflection = 0;
       specExp = 25;
+      ior = -1;
     }
     else if (m == MIRROR) {
       kDiffuse = 0;
       kSpecular = 0;
       kReflection = 1;
       specExp = -1;
+      ior = -1;
     }
     else if (m == ALL_IN_ONE) {
       kDiffuse = 0.5;
-      kSpecular = 100;
+      kSpecular = 0.5;
       kReflection = 1;
       specExp = 25;
+      ior = -1;
+    }
+    else if(m == GLASS) {
+      kDiffuse = 0;
+      kSpecular = 0;
+      kReflection = 0.2;
+      specExp = -1;
+      ior = 1.3;
+
     }
   }
   virtual ~Object() {}
@@ -245,7 +296,8 @@ bool trace (const Vec3d &orig,
 
   if (hitObject != NULL)
   {
-    hitPoint = orig + dir * (closestDist - EPS);
+    hitPoint = orig + dir * closestDist;
+    // hitPoint = orig + dir * (closestDist - EPS);
     return true;
   }
   else
@@ -303,7 +355,7 @@ void computeShadows(const Vec3d &hitPoint,
 }
 
 Vec3d computeSpecular (const Vec3d &hitPoint,
-                       const Vec3d &dir,
+                       const Vec3d &minusDir,
                        Vec3d N,
                        int specExp,
                        const vector<Light*> &lights,
@@ -329,7 +381,7 @@ Vec3d computeSpecular (const Vec3d &hitPoint,
 
       if (specExp != -1) {
         Vec3d reflDir = normalize(reflectRay(dirToLight, N));
-        double cosA = clamp(dotProduct(reflDir, -dir));
+        double cosA = clamp(dotProduct(reflDir, minusDir), -1, 1);
         if (cosA > 0) {
           retColor += lights[i]->color * pow(cosA, specExp);
         }
@@ -379,18 +431,17 @@ Vec3d castRay(Vec3d orig,
   Vec3d retColor = BACKGROUND_COLOR;
 
   Object* hitObject;
-  Vec3d hitPoint(0,0,0);
-  double tMin, tMax;
+  Vec3d hitPoint, reflectedDir, minusDir, N;
   Vec3d objColor;
+  double kD, kS, kR, ior;
+  double tMin, tMax;
   int specExp;
-  double kD;
-  double kS;
-  double kR;
-  Vec3d N;
-  Vec3d reflectedDir;
   bool inShadow[lights.size()];
+  Vec3d reflectionOrig;
+  Vec3d refractionOrig;
+  double k;
 
-  if (recDepth == 0) return BACKGROUND_COLOR;
+  if (recDepth == 0) { return retColor; }
 
   if (trace(orig, dir, objects, hitObject, hitPoint, tMin, tMax))
   {
@@ -399,25 +450,52 @@ Vec3d castRay(Vec3d orig,
     kD = hitObject->kDiffuse;
     kS = hitObject->kSpecular;
     kR = hitObject->kReflection;
+    ior = hitObject->ior;
     N  = hitObject->getNormal(hitPoint);
     reflectedDir = reflectRay(-normalize(dir), N);
+    if (dotProduct(dir, N) < 0) {
+      reflectionOrig = hitPoint + EPS * N;
+      refractionOrig = hitPoint - EPS * N;
+    }
+    else {
+      reflectionOrig = hitPoint - EPS * N;
+      refractionOrig = hitPoint + EPS * N;
+    }
 
-    computeShadows(hitPoint, N, inShadow, objects, lights);
+
+    computeShadows(reflectionOrig, N, inShadow, objects, lights);
 
     retColor = Vec3d(0);
-    double k = 1;
+    k = 1;
 
     if (kD)
-      retColor += objColor * k * kD * computeDiffuse(hitPoint, N, lights, inShadow);
+      retColor += k * kD * computeDiffuse(reflectionOrig, N, lights, inShadow);
     k *= clamp(1-kD);
 
     if (specExp != -1 && kS)
-      retColor += objColor * kS  * computeSpecular(hitPoint, dir, N, specExp, lights, inShadow);
+      retColor += kS  * computeSpecular(reflectionOrig, -normalize(dir) , N, specExp, lights, inShadow);
     k *= clamp(1-kS);
 
-    if (kR)
-      retColor += objColor * k * kR * castRay(hitPoint, reflectedDir, objects, lights, recDepth-1);
-    k *= clamp(1-kR);
+    if (false);
+    else {
+      double kF = kFresnel(dir, N, hitObject->ior);
+      if (kR)
+      retColor += k * kR * castRay(reflectionOrig, reflectedDir, objects, lights, recDepth-1);
+      k *= clamp(1-kR);
+
+      if (ior != -1) {
+        Vec3d refractionDirection = normalize(refractRay(dir, N, hitObject->ior));
+        // Vec3d refractionColor = castRay(refractionRayOrig, refractionDirection, objects, lights, options, depth + 1, 1);
+        // double kr;
+        // fresnel(dir, N, hitObject->ior, kr);
+        // hitColor = refractionColor * (1 - kr);
+
+        retColor += k * castRay(refractionOrig, refractionDirection, objects, lights, recDepth-1);
+
+      }
+    }
+
+    retColor = retColor * objColor;
   }
 
   return retColor;
@@ -430,24 +508,27 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   double yScale = (xScale * IMG_HEIGHT) / IMG_WIDTH;
 
   Vec3d camera(0,0,0);
-  uint32_t color;
 
   /* Initialize objects: */
   vector<Object*> objects;
 
-  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1.4, DIFFUSE_AND_GLOSSY);
+  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1.4, GLASS);
   sph1->color = Vec3d(1,0,1);
   objects.push_back(sph1);
 
-  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4, DIFFUSE_AND_GLOSSY);
+  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4, GLASS);
   sph2->color = Vec3d(1,1,0);
   objects.push_back(sph2);
 
-  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4, DIFFUSE_AND_GLOSSY);
+  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4, GLASS);
   sph3->color = Vec3d(0,1,1);
   objects.push_back(sph3);
 
-  Sphere* bigSph = new Sphere(Vec3d(0,-160,16), 156, DIFFUSE_AND_GLOSSY);
+  Sphere* backSph = new Sphere(Vec3d(0, 0, 30), 5, ALL_IN_ONE);
+  backSph->color = Vec3d(1);
+  objects.push_back(backSph);
+
+  Sphere* bigSph = new Sphere(Vec3d(0,-160,16), 156, GLASS);
   bigSph->color = Vec3d(1);
   objects.push_back(bigSph);
 
@@ -469,10 +550,6 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   rightTopLight->source = Vec3d(10,10,16);
   lights.push_back(rightTopLight);
 
-  // Light* light4 = new Light(0.5, POINT);
-  // light4->source = Vec3d(10, 10, 16);
-  // lights.push_back(light4);
-
 
   /* Fill image: */
 
@@ -484,19 +561,22 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
         |a/       ? = zz * tg(a) * 2 / IMG_WIDTH
         |/        xx = (IMG_WIDTH/2) * zz * tg(a) * 2 / IMG_WIDTH
   */
+  double zz, xx, yy;
+  Vec3d dir, color;
+  uint32_t red, green, blue;
 
   for (int y = -IMG_HEIGHT/2; y < IMG_HEIGHT/2; y++) {
     for (int x = -IMG_WIDTH/2; x < IMG_WIDTH/2; x++) {
-      double zz = 1;
-      double xx = (x + 0.5) / IMG_WIDTH  * 2*zz * xScale;
-      double yy = (y + 0.5) / IMG_HEIGHT * 2*zz * yScale;
-      Vec3d dir = normalize(Vec3d(xx, yy, zz));
+      zz = 1;
+      xx = (x + 0.5) / IMG_WIDTH  * 2*zz * xScale;
+      yy = (y + 0.5) / IMG_HEIGHT * 2*zz * yScale;
+      dir = normalize(Vec3d(xx, yy, zz));
 
-      Vec3d color = castRay(camera, dir, objects, lights, REC_DEPTH);
+      color = castRay(camera, dir, objects, lights, REC_DEPTH);
 
-      uint32_t red = uint32_t(clamp(color.x) * 255);
-      uint32_t green = uint32_t(clamp(color.y) * 255) << 8;
-      uint32_t blue = uint32_t(clamp(color.z) * 255) << 16;
+      red = uint32_t(clamp(color.x) * 255);
+      green = uint32_t(clamp(color.y) * 255) << 8;
+      blue = uint32_t(clamp(color.z) * 255) << 16;
 
       image[y+IMG_HEIGHT/2][x+IMG_HEIGHT/2] = red + green + blue;
     }
