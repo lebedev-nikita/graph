@@ -9,9 +9,10 @@
 // #include <omp.h>
 // #include "/usr/local/opt/libomp/include/omp.h"
 
-#include "Bitmap.h"
 
 using namespace std;
+#include "Gauss.h"
+#include "Bitmap.h"
 
 const uint32_t RED   = 0x000000FF;
 const uint32_t GREEN = 0x0000FF00;
@@ -35,7 +36,7 @@ const uint32_t BLUE  = 0x00FF0000;
 #define FOV M_PI/3
 #define BACKGROUND_COLOR Vec3d(0)
 #define EPS 0.0000001
-#define REC_DEPTH 3
+#define REC_DEPTH 7
 
 
 /* Векторы: */
@@ -50,19 +51,19 @@ public:
   {}
   Vec3d(double xx): x(xx), y(xx), z(xx)
   {}
-  Vec3d operator * (const double n) const
+  inline Vec3d operator * (const double n) const
   { return Vec3d(this->x * n, this->y * n, this->z * n); }
-  Vec3d operator * (const Vec3d &v) const
+  inline Vec3d operator * (const Vec3d &v) const
   { return Vec3d(this->x * v.x, this->y * v.y, this->z * v.z); }
-  friend Vec3d operator * (const double &r, const Vec3d &v)
+  friend inline Vec3d operator * (const double &r, const Vec3d &v)
   { return Vec3d(v.x * r, v.y * r, v.z * r); }
-  Vec3d operator - (const Vec3d &v) const
+  inline Vec3d operator - (const Vec3d &v) const
   { return Vec3d(this->x - v.x, this->y - v.y, this->z - v.z); }
-  Vec3d operator - () const
+  inline Vec3d operator - () const
   { return Vec3d(-x, -y, -z); }
-  Vec3d operator + (const Vec3d &v) const
+  inline Vec3d operator + (const Vec3d &v) const
   { return Vec3d(this->x + v.x, this->y + v.y, this->z + v.z); }
-  Vec3d operator += (const Vec3d &v)
+  inline Vec3d operator += (const Vec3d &v)
   {
     this->x += v.x;
     this->y += v.y;
@@ -70,20 +71,27 @@ public:
     return *this;
   }
   friend inline double abs(const Vec3d &v)
-  { return sqrt(v.x*v.x+v.y*v.y+v.z*v.z); }
+  { return sqrt(v.x*v.x + v.y*v.y + v.z*v.z); }
 };
 
 
 /* Вспомогательные функции: */
 
-inline double dotProduct(const Vec3d &v, const Vec3d &u)
-{ return (v.x * u.x) + (v.y * u.y) + (v.z * u.z); }
+inline double dotProduct(const Vec3d &a, const Vec3d &b)
+{ return (a.x * b.x) + (a.y * b.y) + (a.z * b.z); }
+
+// В левом ортонормированном базисе
+inline Vec3d vectProduct(const Vec3d &a, const Vec3d &b)
+{ return Vec3d(a.z*b.y-a.y*b.z, a.x*b.z-a.z*b.x, a.y*b.x-a.x*b.y); }
 
 inline Vec3d normalize(const Vec3d &vec)
 { return vec * (1 / sqrt(dotProduct(vec,vec))); }
 
 inline double clamp(double num, double low = 0, double hi = 1)
 { return (num < low)?low:(num>hi)?hi:num; }
+
+inline double cos(const Vec3d &a, const Vec3d &b)
+{ return clamp(dotProduct(normalize(a), normalize(b)), -1, 1);}
 
 inline Vec3d reflectRay(const Vec3d &I, const Vec3d &N)
 { return 2*N*dotProduct(I, N) - I; }
@@ -130,7 +138,7 @@ double kFresnel(const Vec3d &I, const Vec3d &N, const double ior)
   if (ior == -1) { return 0; }
 
   double kr;
-  double cosi = clamp(dotProduct(I, N), -1, 1);
+  double cosi = cos(I, N);
   double etai = 1, etat = ior;
   if (cosi > 0) { swap(etai, etat); }
 
@@ -207,6 +215,47 @@ public:
   virtual Vec3d getNormal(const Vec3d &point) const = 0;
 };
 
+class Parallelogram : public Object {
+public:
+  Vec3d corner;
+  Vec3d edge1;
+  Vec3d edge2;
+
+  Parallelogram(const Vec3d &c, const Vec3d &e1, const Vec3d &e2, MaterialType m) :
+    Object(m), corner(c), edge1(e1), edge2(e2) {}
+
+
+  Vec3d getNormal(const Vec3d &point = Vec3d(0)) const
+  {
+    return -normalize(vectProduct(edge1, edge2));
+  }
+
+  // k * [dir] = ([corner] - [orig]) + a * [edge1] + b * [edge2]
+  bool intersect(const Vec3d &orig, const Vec3d &dir, double &tMin, double &tMax)
+  {
+    Vec3d N = this->getNormal();
+
+    Vec3d CO = corner - orig;
+    Vec3d dirEdge1 = normalize(edge1);
+
+    double system[3][4] = { dir.x, -edge1.x, -edge2.x,
+                            dir.y, -edge1.y, -edge2.y,
+                            dir.z, -edge1.z, -edge2.z};
+
+    double f[3] = {CO.x, CO.y, CO.z};
+
+    double k,a,b;
+    solveSystem((double*)system,f,k,a,b);
+
+    if(0 <= a && a <= 1 && 0 <= b && b <= 1)
+    {
+      tMin = tMax = k;
+      return true;
+    }
+    else { return false; }
+  }
+};
+
 class Sphere : public Object {
 public:
   Vec3d center;
@@ -214,7 +263,7 @@ public:
   double rad2;
 
   Sphere(const Vec3d &c, double r, MaterialType m) :
-                  center(c), rad(r), rad2(r*r), Object(m) {}
+    center(c), rad(r), rad2(r*r), Object(m) {}
 
   bool intersect(const Vec3d &orig, const Vec3d &dir, double &tMin, double &tMax)
   {
@@ -366,7 +415,7 @@ Vec3d computeSpecular (const Vec3d &hitPoint,
 
       if (specExp != -1) {
         Vec3d reflDir = normalize(reflectRay(dirToLight, N));
-        double cosA = clamp(dotProduct(reflDir, minusDir), -1, 1);
+        double cosA = cos(reflDir, minusDir);
         if (cosA > 0) {
           retColor += lights[i]->color * pow(cosA, specExp);
         }
@@ -401,7 +450,7 @@ Vec3d computeDiffuse (const Vec3d &hitPoint,
           break;
       }
 
-      retColor += lights[i]->color * clamp(dotProduct(dirToLight, N));
+      retColor += lights[i]->color * clamp(abs(dotProduct(dirToLight, N)));
     }
   }
   return retColor;
@@ -450,18 +499,18 @@ Vec3d castRay(Vec3d orig,
 
     retColor = Vec3d(0);
 
-    if (kD)
+    if (kD) // DIFFUSE_AND_GLOSSY
     {
       retColor += kD * computeDiffuse(reflectionOrig, N, lights, inShadow);
 
       if (specExp != -1 && (1-kD))
         retColor += (1-kD)  * computeSpecular(reflectionOrig, -normalize(dir) , N, specExp, lights, inShadow);
     }
-    else if (ior == -1)
+    else if (ior == -1) // MIRROR
     {
         retColor += castRay(reflectionOrig, reflectedDir, objects, lights, recDepth-1);
     }
-    else
+    else // GLASS
     {
       kR = kFresnel(dir, N, hitObject->ior);
       if (kR)
@@ -491,43 +540,62 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   /* Initialize objects: */
   vector<Object*> objects;
 
-  Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1.4, MIRROR);
-  sph1->color = Vec3d(1,0,1);
-  objects.push_back(sph1);
+  Parallelogram* pg1 = new Parallelogram(Vec3d(-5,-5,15), Vec3d(10,0,0), Vec3d(0,10,0),
+                                                                    DIFFUSE_AND_GLOSSY);
+  pg1->color = Vec3d(1,1,0);
+  objects.push_back(pg1);
 
-  Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4, GLASS);
-  sph2->color = Vec3d(1,1,0);
-  objects.push_back(sph2);
+  Parallelogram* pg2 = new Parallelogram(Vec3d(5,-5,5), Vec3d(0,10,0), Vec3d(0,0,10),
+                                                                    DIFFUSE_AND_GLOSSY);
+  pg2->color = Vec3d(0,1,0);
+  objects.push_back(pg2);
 
-  Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4, GLASS);
-  sph3->color = Vec3d(0,1,1);
-  objects.push_back(sph3);
+  Parallelogram* pg3 = new Parallelogram(Vec3d(-5,-5,5), Vec3d(0,10,0), Vec3d(0,0,10),
+                                                                    DIFFUSE_AND_GLOSSY);
+  pg3->color = Vec3d(0,1,0);
+  objects.push_back(pg3);
 
-  Sphere* backSph = new Sphere(Vec3d(0, 0, 30), 5, DIFFUSE_AND_GLOSSY);
-  backSph->color = Vec3d(1);
-  objects.push_back(backSph);
-
-  Sphere* bigSph = new Sphere(Vec3d(0,-160,16), 156, GLASS);
-  bigSph->color = Vec3d(1);
-  objects.push_back(bigSph);
+  // Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1.4, MIRROR);
+  // sph1->color = Vec3d(1,0,1);
+  // objects.push_back(sph1);
+  //
+  // Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4, GLASS);
+  // sph2->color = Vec3d(1,1,0);
+  // objects.push_back(sph2);
+  //
+  // Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4, GLASS);
+  // sph3->color = Vec3d(0,1,1);
+  // objects.push_back(sph3);
+  //
+  // Sphere* backSph = new Sphere(Vec3d(0, 0, 24), 4, DIFFUSE_AND_GLOSSY);
+  // backSph->color = Vec3d(1,0,1);
+  // objects.push_back(backSph);
+  //
+  // Sphere* bigSph = new Sphere(Vec3d(0,0,16), 17, DIFFUSE_AND_GLOSSY);
+  // bigSph->color = Vec3d(0,1,0);
+  // objects.push_back(bigSph);
 
   /* Initialize lights: */
   vector<Light*> lights;
 
-  Light* ambientLight = new Light(0.2, AMBIENT);
-  lights.push_back(ambientLight);
+  // Light* ambientLight = new Light(0.2, AMBIENT);
+  // lights.push_back(ambientLight);
+  //
+  // Light* topLight = new Light(0.5, POINT);
+  // topLight->source = Vec3d(0, 10, 16);
+  // lights.push_back(topLight);
+  //
+  // Light* directionalLight = new Light(Vec3d(1), DIRECTIONAL);
+  // directionalLight->direction = normalize(Vec3d(-1,-0.5,0));
+  // lights.push_back(directionalLight);
+  //
+  // Light* rightTopLight = new Light(0.4, POINT);
+  // rightTopLight->source = Vec3d(10,10,16);
+  // lights.push_back(rightTopLight);
 
-  Light* topLight = new Light(0.5, POINT);
-  topLight->source = Vec3d(0, 10, 16);
-  lights.push_back(topLight);
-
-  Light* directionalLight = new Light(Vec3d(1), DIRECTIONAL);
-  directionalLight->direction = normalize(Vec3d(-1,-0.5,0));
-  lights.push_back(directionalLight);
-
-  Light* rightTopLight = new Light(0.4, POINT);
-  rightTopLight->source = Vec3d(10,10,16);
-  lights.push_back(rightTopLight);
+  Light* cameraLight = new Light(1, POINT);
+  cameraLight->source = Vec3d(0);
+  lights.push_back(cameraLight);
 
 
   /* Fill image: */

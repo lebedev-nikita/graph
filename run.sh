@@ -6,4 +6,4 @@ cmake ..
 make
 ./rt
 cd ..
-scripts/op.sh
+./op.sh

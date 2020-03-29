@@ -6,7 +6,6 @@ add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
 set (CMAKE_CXX_STANDARD 11)
 
-add_executable(rt main.cpp Bitmap.cpp)
+add_executable(rt main.cpp Bitmap.cpp Gauss.cpp)
 
 target_link_libraries(rt ${ALL_LIBS} )
-
