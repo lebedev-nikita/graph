@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 3.8)
 project (rt)
 
 # get rid of annoying MSVC warnings.
-add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+add_definitions(-D_CRT_SECURE_NO_WARNINGS -O3)
 
 set (CMAKE_CXX_STANDARD 11)
 

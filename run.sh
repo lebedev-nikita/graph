@@ -1,9 +1,9 @@
-# scripts/clean.sh
+# ./clean.sh
 mkdir tmp
 cd tmp
 mv zout.bmp old.bmp
 cmake ..
 make
-./rt
+time ./rt
 cd ..
 ./op.sh

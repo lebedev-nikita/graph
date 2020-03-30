@@ -2,88 +2,82 @@
 #include <cstdlib>
 #include <cmath>
 
+#define N 3
+
 using namespace std;
 
-void forward_elimination(double matrix[], double f[], int var_links[], int N);
-void back_substitution(double matrix[], double f[], int var_links[], double X[], int N);
+void inline forward_elimination(double matrix[N][N], double f[N], int var_links[N]);
+void inline back_substitution(double matrix[N][N], double f[N],
+                              int var_links[N], double X[N]);
 
-void solveSystem(double matrix[3*3], double f[3], double &a, double &b, double &c) {
-    int N = 3;
+void solveSystem(double matrix[N][N], double f[N], double &a, double &b, double &c) {
 
-    double * X; //Искомые переменные (не переставленные)
-    int * var_links; //Отображает переставленные переменные на не переставленные
+    double X[N]; //Искомые переменные (не переставленные)
+    int var_links[N] = {0,1,2}; //Отображает переставленные переменные на не переставленные
 
-    X = (double*) malloc(sizeof(double) * N);
-    var_links = (int*) malloc(sizeof(int) * N);
-    for (int i = 0; i < N; ++i)
-        var_links[i] = i;
+    forward_elimination(matrix, f, var_links);
 
+    back_substitution(matrix, f, var_links, X);
 
-    forward_elimination(matrix, f, var_links, N);
-
-    back_substitution(matrix, f, var_links, X, N);
     a = X[0];
     b = X[1];
     c = X[2];
-
-    free(X);
-    free(var_links);
 }
 
 
-void back_substitution(double matrix[], double f[], int var_links[], double X[], int N) {
+void inline back_substitution(double matrix[N][N], double f[N],
+                              int var_links[N], double X[N])
+{
     double sum;
-    for (int i = N-1; i >= 0; --i) {
+    int i,j;
+    for (i = N-1; i >= 0; --i) {
         sum = f[i];
-        for (int j = i + 1; j < N; ++j) {
-            sum -= matrix[N * i + j] * X[var_links[j]];
+        for (j = i + 1; j < N; ++j) {
+            sum -= matrix[i][j] * X[var_links[j]];
         }
         X[var_links[i]] = sum;
     }
 }
 
 
-void forward_elimination(double matrix[], double f[], int var_links[], int N) {
+void inline forward_elimination(double matrix[N][N], double f[N], int var_links[N])
+{
     double max_val; // Максимальное значение в строке
     int max_num; // Номер элемента с максимальным значением в столбце
     double mul; // переменная для хранения разных множителей
     int tmp;
+    int i,j,k;
 
-    for (int i = 0; i < N; ++i) {
-        max_val = abs((double)matrix[(N + 1) * i]);
+    for (i = 0; i < N; ++i) {
+        max_val = abs(matrix[i][i]);
         max_num = i;
-        for (int j = i + 1; j < N; ++j) {
-            if ( abs(matrix[N * i + j]) > abs(max_val) ) {
-                max_val = abs(matrix[N * i + j]);
+        for (j = i + 1; j < N; ++j) {
+            if ( abs(matrix[i][j]) > abs(max_val) ) {
+                max_val = abs(matrix[i][j]);
                 max_num = j;
             }
         }
-        // printf("|\nmax: %d\ni: %d\n|", max_num, i);/////////////////////
 
-        tmp = var_links[max_num]; // Меняем местами переменные
-        var_links[max_num] = var_links[i];
-        var_links[i] = tmp;
+        swap(var_links[max_num],var_links[i]); // Меняем местами переменные
 
-        for (int j = 0; j < N; ++j) { // Меняем местами столбцы
-            max_val = matrix[j * N + max_num];
-            matrix[j * N + max_num] = matrix[j * N + i];
-            matrix[j * N + i] = max_val;
+        for (j = 0; j < N; ++j) { // Меняем местами столбцы
+            swap(matrix[j][max_num], matrix[j][i]);
         }
 
-        mul = 1 / matrix[(N + 1) * i]; // Разделим один раз, чтобы потом умножать на 1/a[i][i]
-        matrix[(N + 1) * i] = 1;
+        mul = 1 / matrix[i][i]; // Разделим один раз, чтобы потом умножать на 1/a[i][i]
+        matrix[i][i] = 1;
         f[i] *= mul;
-        for (int j = i + 1; j < N; ++j) {
-            matrix[N * i + j] *= mul;
+        for (j = i + 1; j < N; ++j) {
+            matrix[i][j] *= mul;
         }
 
-        for (int k = i + 1; k < N; ++k) { // Обнуляем нижнюю часть столбца
+        for (k = i + 1; k < N; ++k) { // Обнуляем нижнюю часть столбца
             // k - номер строки
             // j - номер столбца
-            mul = matrix[N * k + i];
-            matrix[N * k + i] = 0;
-            for (int j = i + 1; j < N; ++j)
-                matrix[N * k + j] -= matrix[N * i + j] * mul;
+            mul = matrix[k][i];
+            matrix[k][i] = 0;
+            for (j = i + 1; j < N; ++j)
+                matrix[k][j] -= matrix[i][j] * mul;
             f[k] -= f[i] * mul;
         }
 

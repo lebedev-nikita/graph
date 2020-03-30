@@ -12,6 +12,7 @@
 
 using namespace std;
 #include "Gauss.h"
+// #include "Kramer.h"
 #include "Bitmap.h"
 
 const uint32_t RED   = 0x000000FF;
@@ -238,14 +239,14 @@ public:
     Vec3d CO = corner - orig;
     Vec3d dirEdge1 = normalize(edge1);
 
-    double system[3][4] = { dir.x, -edge1.x, -edge2.x,
+    double system[3][3] = { dir.x, -edge1.x, -edge2.x,
                             dir.y, -edge1.y, -edge2.y,
                             dir.z, -edge1.z, -edge2.z};
 
     double f[3] = {CO.x, CO.y, CO.z};
 
     double k,a,b;
-    solveSystem((double*)system,f,k,a,b);
+    solveSystem(system,f,k,a,b); // Gauss
 
     if(0 <= a && a <= 1 && 0 <= b && b <= 1)
     {
@@ -519,7 +520,7 @@ Vec3d castRay(Vec3d orig,
 
       if (1-kR)
       {
-        Vec3d refractionDirection = normalize(refractRay(dir, N, hitObject->ior));
+        Vec3d refractionDirection = normalize(refractRay(dir, -N, hitObject->ior));
         retColor += (1-kR) * castRay(refractionOrig, refractionDirection,
                                      objects, lights, recDepth-1);
       }
@@ -555,20 +556,25 @@ void createScene(vector<Object*> &objects, vector<Light*> &lights)
   pgBot->color = Vec3d(0,0,1);
   objects.push_back(pgBot);
 
-  // Сферы
-  
-  Sphere* sph1 = new Sphere(Vec3d(3,-3,13), 2, MIRROR);
-  sph1->color = Vec3d(0.9);
-  objects.push_back(sph1);
+  Parallelogram* pgTop = new Parallelogram(Vec3d(-5,5,15), Vec3d(10,0,0), Vec3d(0,0,-10),
+  DIFFUSE_AND_GLOSSY);
+  pgTop->color = Vec3d(1);
+  objects.push_back(pgTop);
 
-  Sphere* sph2 = new Sphere(Vec3d(-3,-3,13), 2, GLASS);
-  sph2->color = Vec3d(1);
-  objects.push_back(sph2);
-  //
-  // Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4, GLASS);
-  // sph3->color = Vec3d(0,1,1);
-  // objects.push_back(sph3);
-  //
+  // Сферы
+
+  Sphere* mirrorSph = new Sphere(Vec3d(3,-3,13), 2, MIRROR);
+  mirrorSph->color = Vec3d(0.9);
+  objects.push_back(mirrorSph);
+
+  Sphere* glassSph = new Sphere(Vec3d(-3,-3,10), 2, GLASS);
+  glassSph->color = Vec3d(1);
+  objects.push_back(glassSph);
+
+  Sphere* normalSph = new Sphere(Vec3d(-1,-2,13), 1.5, DIFFUSE_AND_GLOSSY);
+  normalSph->color = Vec3d(1);
+  objects.push_back(normalSph);
+
   // Sphere* backSph = new Sphere(Vec3d(0, 0, 24), 4, DIFFUSE_AND_GLOSSY);
   // backSph->color = Vec3d(1,0,1);
   // objects.push_back(backSph);
