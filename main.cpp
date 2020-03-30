@@ -36,10 +36,10 @@ const uint32_t BLUE  = 0x00FF0000;
 #define FOV M_PI/3
 #define BACKGROUND_COLOR Vec3d(0)
 #define EPS 0.0000001
-#define REC_DEPTH 7
+#define REC_DEPTH 4
 
 
-/* Векторы: */
+// Векторы:
 
 class Vec3d {
 public:
@@ -75,12 +75,12 @@ public:
 };
 
 
-/* Вспомогательные функции: */
+// Вспомогательные функции:
 
 inline double dotProduct(const Vec3d &a, const Vec3d &b)
 { return (a.x * b.x) + (a.y * b.y) + (a.z * b.z); }
 
-// В левом ортонормированном базисе
+  /* (В левом ортонормированном базисе) */
 inline Vec3d vectProduct(const Vec3d &a, const Vec3d &b)
 { return Vec3d(a.z*b.y-a.y*b.z, a.x*b.z-a.z*b.x, a.y*b.x-a.x*b.y); }
 
@@ -158,7 +158,7 @@ double kFresnel(const Vec3d &I, const Vec3d &N, const double ior)
   return kr;
 }
 
-/* Свет: */
+// Свет:
 
 enum LightType { AMBIENT, POINT, DIRECTIONAL};
 
@@ -174,7 +174,7 @@ public:
 };
 
 
-/* Объекты: */
+// Объекты:
 
 enum MaterialType { DIFFUSE, DIFFUSE_AND_GLOSSY, MIRROR, ALL_IN_ONE, GLASS };
 
@@ -282,7 +282,7 @@ public:
 };
 
 
-/* Основные функции: */
+// Основные функции:
 
 /*
           (Light)
@@ -331,7 +331,6 @@ bool trace (const Vec3d &orig,
   if (hitObject != NULL)
   {
     hitPoint = orig + dir * closestDist;
-    // hitPoint = orig + dir * (closestDist - EPS);
     return true;
   }
   else
@@ -504,7 +503,8 @@ Vec3d castRay(Vec3d orig,
       retColor += kD * computeDiffuse(reflectionOrig, N, lights, inShadow);
 
       if (specExp != -1 && (1-kD))
-        retColor += (1-kD)  * computeSpecular(reflectionOrig, -normalize(dir) , N, specExp, lights, inShadow);
+        retColor += (1-kD)  * computeSpecular(reflectionOrig, -normalize(dir),
+                                              N, specExp, lights, inShadow);
     }
     else if (ior == -1) // MIRROR
     {
@@ -514,12 +514,14 @@ Vec3d castRay(Vec3d orig,
     {
       kR = kFresnel(dir, N, hitObject->ior);
       if (kR)
-        retColor += kR * castRay(reflectionOrig, reflectedDir, objects, lights, recDepth-1);
+        retColor += kR * castRay(reflectionOrig, reflectedDir,
+                                 objects, lights, recDepth-1);
 
       if (1-kR)
       {
         Vec3d refractionDirection = normalize(refractRay(dir, N, hitObject->ior));
-        retColor += (1-kR) * castRay(refractionOrig, refractionDirection, objects, lights, recDepth-1);
+        retColor += (1-kR) * castRay(refractionOrig, refractionDirection,
+                                     objects, lights, recDepth-1);
       }
     }
 
@@ -529,39 +531,39 @@ Vec3d castRay(Vec3d orig,
   return retColor;
 }
 
-
-void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
+void createScene(vector<Object*> &objects, vector<Light*> &lights)
 {
-  double xScale = tan(FOV / 2.0);
-  double yScale = (xScale * IMG_HEIGHT) / IMG_WIDTH;
+  // Стены
 
-  Vec3d camera(0,0,0);
-
-  /* Initialize objects: */
-  vector<Object*> objects;
-
-  Parallelogram* pg1 = new Parallelogram(Vec3d(-5,-5,15), Vec3d(10,0,0), Vec3d(0,10,0),
+  Parallelogram* pgFar = new Parallelogram(Vec3d(-5,-5,15), Vec3d(10,0,0), Vec3d(0,10,0),
                                                                     DIFFUSE_AND_GLOSSY);
-  pg1->color = Vec3d(1,1,0);
-  objects.push_back(pg1);
+  pgFar->color = Vec3d(1,1,0);
+  objects.push_back(pgFar);
 
-  Parallelogram* pg2 = new Parallelogram(Vec3d(5,-5,5), Vec3d(0,10,0), Vec3d(0,0,10),
+  Parallelogram* pgRight = new Parallelogram(Vec3d(5,-5,5), Vec3d(0,10,0), Vec3d(0,0,10),
                                                                     DIFFUSE_AND_GLOSSY);
-  pg2->color = Vec3d(0,1,0);
-  objects.push_back(pg2);
+  pgRight->color = Vec3d(0,1,0);
+  objects.push_back(pgRight);
 
-  Parallelogram* pg3 = new Parallelogram(Vec3d(-5,-5,5), Vec3d(0,10,0), Vec3d(0,0,10),
+  Parallelogram* pgLeft = new Parallelogram(Vec3d(-5,-5,5), Vec3d(0,10,0), Vec3d(0,0,10),
                                                                     DIFFUSE_AND_GLOSSY);
-  pg3->color = Vec3d(0,1,0);
-  objects.push_back(pg3);
+  pgLeft->color = Vec3d(0,1,0);
+  objects.push_back(pgLeft);
 
-  // Sphere* sph1 = new Sphere(Vec3d(-3,0,16), 1.4, MIRROR);
-  // sph1->color = Vec3d(1,0,1);
-  // objects.push_back(sph1);
-  //
-  // Sphere* sph2 = new Sphere(Vec3d(0,0,16), 1.4, GLASS);
-  // sph2->color = Vec3d(1,1,0);
-  // objects.push_back(sph2);
+  Parallelogram* pgBot = new Parallelogram(Vec3d(-5,-5,15), Vec3d(10,0,0), Vec3d(0,0,-10),
+  DIFFUSE_AND_GLOSSY);
+  pgBot->color = Vec3d(0,0,1);
+  objects.push_back(pgBot);
+
+  // Сферы
+  
+  Sphere* sph1 = new Sphere(Vec3d(3,-3,13), 2, MIRROR);
+  sph1->color = Vec3d(0.9);
+  objects.push_back(sph1);
+
+  Sphere* sph2 = new Sphere(Vec3d(-3,-3,13), 2, GLASS);
+  sph2->color = Vec3d(1);
+  objects.push_back(sph2);
   //
   // Sphere* sph3 = new Sphere(Vec3d(3,0,16), 1.4, GLASS);
   // sph3->color = Vec3d(0,1,1);
@@ -576,7 +578,6 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   // objects.push_back(bigSph);
 
   /* Initialize lights: */
-  vector<Light*> lights;
 
   // Light* ambientLight = new Light(0.2, AMBIENT);
   // lights.push_back(ambientLight);
@@ -597,8 +598,23 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
   cameraLight->source = Vec3d(0);
   lights.push_back(cameraLight);
 
+}
 
-  /* Fill image: */
+
+void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
+{
+  double xScale = tan(FOV / 2.0);
+  double yScale = (xScale * IMG_HEIGHT) / IMG_WIDTH;
+
+  Vec3d camera(0,0,0);
+
+  // Initialize objects:
+
+  vector<Object*> objects;
+  vector<Light*> lights;
+  createScene(objects, lights);
+
+  // Fill image:
 
   /*
           xx
