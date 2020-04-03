@@ -6,13 +6,9 @@
 #include <unordered_map>
 
 #include <cmath>
-// #include <omp.h>
-// #include "/usr/local/opt/libomp/include/omp.h"
-
 
 using namespace std;
 #include "Gauss.h"
-// #include "Kramer.h"
 #include "Bitmap.h"
 
 const uint32_t RED   = 0x000000FF;
@@ -20,24 +16,16 @@ const uint32_t GREEN = 0x0000FF00;
 const uint32_t BLUE  = 0x00FF0000;
 
 /*
-    TODO: NEXT:
-      * добавить меши
-      * распараллелить
     TODO: LATER:
-      * сгладить пиксели
-      * переиначить функцию kFresnel
-      * настроить так, чтобы все работало при разных ширине и высоте
-        (попробовать image = malloc(...) ?)
-      * POINT: сделать, чтобы свет отражался и от внутренней поверхности сферы,
-        если она окружает камеру
+      * Окончательно настроить сцены
       * Написать в README, какими источниками пользовался
 */
 #define IMG_WIDTH 1024
 #define IMG_HEIGHT 1024
 #define FOV M_PI/3
-#define BACKGROUND_COLOR Vec3d(0)
-#define EPS 0.0000001
-#define REC_DEPTH 4
+#define BACKGROUND_COLOR Vec3d(1)
+#define EPS 0.000000000001
+#define REC_DEPTH 8
 
 
 // Векторы:
@@ -126,37 +114,12 @@ bool solveQuadratic(double a, double b, double c, double &tMin, double &tMax)
     t2 = (-b - sqrtDiscr) / (2*a);
 
     if (t1 > t2)
-    swap(t1, t2);
+      swap(t1, t2);
 
     tMin = t1;
     tMax = t2;
     return true;
   }
-}
-
-double kFresnel(const Vec3d &I, const Vec3d &N, const double ior)
-{
-  if (ior == -1) { return 0; }
-
-  double kr;
-  double cosi = cos(I, N);
-  double etai = 1, etat = ior;
-  if (cosi > 0) { swap(etai, etat); }
-
-  double sint = etai / etat * ((cosi * cosi < 1)?sqrt(1 - cosi * cosi):0);
-
-  if (sint >= 1) {
-      kr = 1;
-  }
-  else {
-      double cost = (sint * sint < 1)?sqrtf(1 - sint * sint):0;
-      cosi = abs(cosi);
-      double Rs = ((etat * cosi) - (etai * cost)) / ((etat * cosi) + (etai * cost));
-      double Rp = ((etai * cosi) - (etat * cost)) / ((etai * cosi) + (etat * cost));
-      kr = (Rs * Rs + Rp * Rp) / 2;
-  }
-
-  return kr;
 }
 
 // Свет:
@@ -184,6 +147,7 @@ public:
   Vec3d color;
   MaterialType material;
   double kDiffuse;
+  double kRefl;
   int specExp;
   double ior;
 
@@ -192,23 +156,26 @@ public:
     if (m == DIFFUSE) {
       kDiffuse = 1;
       specExp = -1;
+      kRefl = 0;
       ior = -1;
     }
     else if (m == DIFFUSE_AND_GLOSSY) {
       kDiffuse = 0.5;
+      kRefl = 0.1;
       specExp = 25;
       ior = -1;
     }
     else if (m == MIRROR) {
       kDiffuse = 0;
       specExp = -1;
+      kRefl = 1;
       ior = -1;
     }
     else if(m == GLASS) {
       kDiffuse = 0;
       specExp = -1;
+      kRefl = 0;
       ior = 1.3;
-
     }
   }
   virtual ~Object() {}
@@ -300,14 +267,11 @@ bool trace (const Vec3d &orig,
             const Vec3d &dir,
             const vector<Object*> &objects,
             Object*& hitObject,
-            Vec3d &hitPoint,
-            double &tMin,
-            double &tMax)
+            Vec3d &hitPoint)
 {
   hitObject = NULL;
   double closestDist = INFINITY;
 
-  Object* obj;
   double tmin, tmax;
 
   for (int i = 0; i < objects.size(); i++)
@@ -316,14 +280,10 @@ bool trace (const Vec3d &orig,
     {
       if (tmin > 0 && tmin < closestDist) {
         closestDist = tmin;
-        tMin = tmin;
-        tMax = tmax;
         hitObject = objects[i];
       }
       else if (tmax > 0 && tmax < closestDist) {
         closestDist = tmax;
-        tMin = tmin;
-        tMax = tmax;
         hitObject = objects[i];
       }
     }
@@ -467,8 +427,7 @@ Vec3d castRay(Vec3d orig,
   Object* hitObject;
   Vec3d hitPoint, reflectedDir, minusDir, N;
   Vec3d objColor;
-  double kD, kS, kR, ior;
-  double tMin, tMax;
+  double kD, kR, ior;
   int specExp;
   bool inShadow[lights.size()];
   Vec3d reflectionOrig;
@@ -477,23 +436,16 @@ Vec3d castRay(Vec3d orig,
 
   if (recDepth == 0) { return retColor; }
 
-  if (trace(orig, dir, objects, hitObject, hitPoint, tMin, tMax))
+  if (trace(orig, dir, objects, hitObject, hitPoint))
   {
     objColor = hitObject->color;
     specExp  = hitObject->specExp;
     kD = hitObject->kDiffuse;
+    kR = hitObject->kRefl;
     ior = hitObject->ior;
     N  = hitObject->getNormal(hitPoint);
     reflectedDir = reflectRay(-normalize(dir), N);
-    if (dotProduct(dir, N) < 0) {
-      reflectionOrig = hitPoint + EPS * N;
-      refractionOrig = hitPoint - EPS * N;
-    }
-    else {
-      reflectionOrig = hitPoint - EPS * N;
-      refractionOrig = hitPoint + EPS * N;
-    }
-
+    reflectionOrig = (dotProduct(dir, N) < 0)? (hitPoint + EPS * N): (hitPoint - EPS * N);
 
     computeShadows(reflectionOrig, N, inShadow, objects, lights);
 
@@ -513,14 +465,18 @@ Vec3d castRay(Vec3d orig,
     }
     else // GLASS
     {
-      kR = kFresnel(dir, N, hitObject->ior);
       if (kR)
+      {
         retColor += kR * castRay(reflectionOrig, reflectedDir,
                                  objects, lights, recDepth-1);
+      }
 
       if (1-kR)
       {
-        Vec3d refractionDirection = normalize(refractRay(dir, -N, hitObject->ior));
+        Vec3d refractionDirection = normalize(refractRay(dir, N, hitObject->ior));
+        refractionOrig = (dotProduct(refractionDirection, N) < 0)?
+                         (hitPoint - N * EPS): (hitPoint + N * EPS);
+
         retColor += (1-kR) * castRay(refractionOrig, refractionDirection,
                                      objects, lights, recDepth-1);
       }
@@ -534,76 +490,140 @@ Vec3d castRay(Vec3d orig,
 
 void createScene(vector<Object*> &objects, vector<Light*> &lights)
 {
-  // Стены
 
-  Parallelogram* pgFar = new Parallelogram(Vec3d(-5,-5,15), Vec3d(10,0,0), Vec3d(0,10,0),
-                                                                    DIFFUSE_AND_GLOSSY);
-  pgFar->color = Vec3d(1,1,0);
-  objects.push_back(pgFar);
+  { // spheres
+    Sphere* mirrorSph1 = new Sphere(Vec3d(3,-3,13), 2, MIRROR);
+    mirrorSph1->color = Vec3d(0.9);
+    objects.push_back(mirrorSph1);
 
-  Parallelogram* pgRight = new Parallelogram(Vec3d(5,-5,5), Vec3d(0,10,0), Vec3d(0,0,10),
-                                                                    DIFFUSE_AND_GLOSSY);
-  pgRight->color = Vec3d(0,1,0);
-  objects.push_back(pgRight);
+    Sphere* sph2 = new Sphere(Vec3d(3,0,13), 1.25, DIFFUSE);
+    sph2->color = Vec3d(1);
+    objects.push_back(sph2);
 
-  Parallelogram* pgLeft = new Parallelogram(Vec3d(-5,-5,5), Vec3d(0,10,0), Vec3d(0,0,10),
-                                                                    DIFFUSE_AND_GLOSSY);
-  pgLeft->color = Vec3d(0,1,0);
-  objects.push_back(pgLeft);
+    Sphere* sph3 = new Sphere(Vec3d(3,1.85,13), 0.75, DIFFUSE);
+    sph3->color = Vec3d(1);
+    objects.push_back(sph3);
 
-  Parallelogram* pgBot = new Parallelogram(Vec3d(-5,-5,15), Vec3d(10,0,0), Vec3d(0,0,-10),
-  DIFFUSE_AND_GLOSSY);
-  pgBot->color = Vec3d(0,0,1);
-  objects.push_back(pgBot);
+    Sphere* glassSph = new Sphere(Vec3d(1.5,-1,10), 1, GLASS);
+    glassSph->color = Vec3d(1);
+    objects.push_back(glassSph);
 
-  Parallelogram* pgTop = new Parallelogram(Vec3d(-5,5,15), Vec3d(10,0,0), Vec3d(0,0,-10),
-  DIFFUSE_AND_GLOSSY);
-  pgTop->color = Vec3d(1);
-  objects.push_back(pgTop);
+    Sphere* normalSph = new Sphere(Vec3d(-3.5,-3.5,10), 1.5, DIFFUSE_AND_GLOSSY);
+    normalSph->color = Vec3d(1);
+    objects.push_back(normalSph);
+  }
 
-  // Сферы
+  { // back wall
+    Parallelogram* pgBack = new Parallelogram(Vec3d(6,-5.5,-5), Vec3d(-12,0,0),
+                                              Vec3d(0,11,0), DIFFUSE_AND_GLOSSY);
+    pgBack->color = Vec3d(0,0,1);
+    objects.push_back(pgBack);
+  }
 
-  Sphere* mirrorSph = new Sphere(Vec3d(3,-3,13), 2, MIRROR);
-  mirrorSph->color = Vec3d(0.9);
-  objects.push_back(mirrorSph);
+  { // front wall
+    Parallelogram* pgFront = new Parallelogram(Vec3d(-6,-6,15), Vec3d(12,0,0),
+                                               Vec3d(0,12,0), DIFFUSE_AND_GLOSSY);
+    pgFront->color = Vec3d(1,1,0.3);
+    objects.push_back(pgFront);
+  }
 
-  Sphere* glassSph = new Sphere(Vec3d(-3,-3,10), 2, GLASS);
-  glassSph->color = Vec3d(1);
-  objects.push_back(glassSph);
+  { // right wall, window 3x3
+    // far
+    Parallelogram* pgRight1 = new Parallelogram(Vec3d(5,6,16), Vec3d(0,-12,0),
+                                               Vec3d(0,0,-5), DIFFUSE_AND_GLOSSY);
+    pgRight1->color = Vec3d(0,1,1);
+    objects.push_back(pgRight1);
+    // top
+    Parallelogram* pgRight2 = new Parallelogram(Vec3d(5,6,11), Vec3d(0,-4,0),
+                                                Vec3d(0,0,-2), DIFFUSE_AND_GLOSSY);
+    pgRight2->color = Vec3d(0,1,1);
+    objects.push_back(pgRight2);
+    // bottom
+    Parallelogram* pgRight3 = new Parallelogram(Vec3d(5,-1,11), Vec3d(0,-5,0),
+                                                Vec3d(0,0,-2), DIFFUSE_AND_GLOSSY);
+    pgRight3->color = Vec3d(0,1,1);
+    objects.push_back(pgRight3);
+    // near
+    Parallelogram* pgRight4 = new Parallelogram(Vec3d(5,6,9), Vec3d(0,-12,0),
+                                               Vec3d(0,0,-15), DIFFUSE_AND_GLOSSY);
+    pgRight4->color = Vec3d(0,1,1);
+    objects.push_back(pgRight4);
+  }
 
-  Sphere* normalSph = new Sphere(Vec3d(-1,-2,13), 1.5, DIFFUSE_AND_GLOSSY);
-  normalSph->color = Vec3d(1);
-  objects.push_back(normalSph);
+  { // left wall, window 3x3
+    // far
+    Parallelogram* pgLeft1 = new Parallelogram(Vec3d(-5,6,16), Vec3d(0,-12,0),
+                                               Vec3d(0,0,-5), DIFFUSE_AND_GLOSSY);
+    pgLeft1->color = Vec3d(1,0,1);
+    objects.push_back(pgLeft1);
+    // top
+    Parallelogram* pgLeft2 = new Parallelogram(Vec3d(-5,6,11), Vec3d(0,-4,0),
+                                                Vec3d(0,0,-2), DIFFUSE_AND_GLOSSY);
+    pgLeft2->color = Vec3d(1,0,1);
+    objects.push_back(pgLeft2);
+    // bottom
+    Parallelogram* pgLeft3 = new Parallelogram(Vec3d(-5,-1,11), Vec3d(0,-5,0),
+                                                Vec3d(0,0,-2), DIFFUSE_AND_GLOSSY);
+    pgLeft3->color = Vec3d(1,0,1);
+    objects.push_back(pgLeft3);
+    // near
+    Parallelogram* pgLeft4 = new Parallelogram(Vec3d(-5,6,9), Vec3d(0,-12,0),
+                                               Vec3d(0,0,-15), DIFFUSE_AND_GLOSSY);
+    pgLeft4->color = Vec3d(1,0,1);
+    objects.push_back(pgLeft4);
+  }
 
-  // Sphere* backSph = new Sphere(Vec3d(0, 0, 24), 4, DIFFUSE_AND_GLOSSY);
-  // backSph->color = Vec3d(1,0,1);
-  // objects.push_back(backSph);
-  //
-  // Sphere* bigSph = new Sphere(Vec3d(0,0,16), 17, DIFFUSE_AND_GLOSSY);
-  // bigSph->color = Vec3d(0,1,0);
-  // objects.push_back(bigSph);
+  { // bottom wall
+    Parallelogram* pgBot = new Parallelogram(Vec3d(-6,-5,16), Vec3d(12,0,0),
+                                             Vec3d(0,0,-22), DIFFUSE_AND_GLOSSY);
+    pgBot->color = Vec3d(1,0,0);
+    objects.push_back(pgBot);
+  }
 
-  /* Initialize lights: */
+  { // top wall, window 3x3
+    Parallelogram* pgTop1 = new Parallelogram(Vec3d(6,5,16), Vec3d(-12,0,0),
+                                              Vec3d(0,0,-14.5), DIFFUSE_AND_GLOSSY);
+    pgTop1->color = Vec3d(0,1,0);
+    objects.push_back(pgTop1);
 
-  // Light* ambientLight = new Light(0.2, AMBIENT);
-  // lights.push_back(ambientLight);
-  //
-  // Light* topLight = new Light(0.5, POINT);
-  // topLight->source = Vec3d(0, 10, 16);
-  // lights.push_back(topLight);
-  //
-  // Light* directionalLight = new Light(Vec3d(1), DIRECTIONAL);
-  // directionalLight->direction = normalize(Vec3d(-1,-0.5,0));
-  // lights.push_back(directionalLight);
-  //
-  // Light* rightTopLight = new Light(0.4, POINT);
-  // rightTopLight->source = Vec3d(10,10,16);
-  // lights.push_back(rightTopLight);
+    Parallelogram* pgTop2 = new Parallelogram(Vec3d(6,5,-1.5), Vec3d(-12,0,0),
+                                              Vec3d(0,0,-4.5), DIFFUSE_AND_GLOSSY);
+    pgTop2->color = Vec3d(0,1,0);
+    objects.push_back(pgTop2);
 
-  Light* cameraLight = new Light(1, POINT);
-  cameraLight->source = Vec3d(0);
-  lights.push_back(cameraLight);
+    Parallelogram* pgTop3 = new Parallelogram(Vec3d(6,5,1.5), Vec3d(-4.5,0,0),
+                                              Vec3d(0,0,-3), DIFFUSE_AND_GLOSSY);
+    pgTop3->color = Vec3d(0,1,0);
+    objects.push_back(pgTop3);
 
+    Parallelogram* pgTop4 = new Parallelogram(Vec3d(-1.5,5,1.5), Vec3d(-4.5,0,0),
+                                              Vec3d(0,0,-3), DIFFUSE_AND_GLOSSY);
+    pgTop4->color = Vec3d(0,1,0);
+    objects.push_back(pgTop4);
+  }
+
+  Parallelogram *pg1 = new Parallelogram(Vec3d(-3.53,-1.8,11), Vec3d(0,0,-2),
+  Vec3d(7,-3.5,0), DIFFUSE_AND_GLOSSY);
+  pg1->color = Vec3d(0,1,1);
+  objects.push_back(pg1);
+
+
+  { // lights
+    Light* ambientLight = new Light(0.2, AMBIENT);
+    lights.push_back(ambientLight);
+
+    Light* rightLight = new Light(0.4, POINT);
+    rightLight->source = Vec3d(8,1,9.5);
+    lights.push_back(rightLight);
+
+    Light* leftLight = new Light(0.3, POINT);
+    leftLight->source = Vec3d(-8,1,9.5);
+    lights.push_back(leftLight);
+
+    Light* l3 = new Light(0.5, POINT);
+    l3->source = Vec3d(0,4.5,0);
+    lights.push_back(l3);
+  }
 }
 
 
@@ -622,14 +642,6 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
 
   // Fill image:
 
-  /*
-          xx
-        ______    xx = zz * tg(a)
-        |   /     xx = IMG_WIDTH/2 * ?
-     zz |⏜/
-        |a/       ? = zz * tg(a) * 2 / IMG_WIDTH
-        |/        xx = (IMG_WIDTH/2) * zz * tg(a) * 2 / IMG_WIDTH
-  */
   double zz, xx, yy;
   Vec3d dir, color;
   uint32_t red, green, blue;
@@ -651,7 +663,7 @@ void doEverything(uint32_t image[IMG_HEIGHT][IMG_WIDTH])
     }
   }
 
-  /* Clean pointers: */
+  // Clean pointers:
   for (Light* l : lights)
     delete l;
   for (Object* o : objects)
